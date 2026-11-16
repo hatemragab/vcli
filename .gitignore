@@ -1,0 +1,16 @@
+# Private environment and local state
+.env
+.env.*
+!.env.example
+!.env.*.example
+.vcli/local/
+
+# Dependency/build/test output when implementation begins
+node_modules/
+dist/
+coverage/
+*.log
+
+# Local editor/OS files
+.DS_Store
+Thumbs.db

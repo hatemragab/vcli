@@ -1,0 +1,19 @@
+# Phase 05 acceptance
+
+**Not run.** Use [VERIFICATION](../../docs/VERIFICATION.md) and [STATUS](../STATUS.md); all IDs below need recorded revision/environment and sanitized evidence.
+
+| ID | Setup and scenario | Required result / evidence |
+| --- | --- | --- |
+| P05-A01 | Add SMTP/push to a customized app; repeat; dry-run | Selected files/config/docs register correctly, user edits survive, repeat is idempotent, dry-run writes nothing. Capture never becomes a production transport silently. |
+| P05-A02 | Render HTML/text with hostile variables and missing assets | Escaping and validated variables hold; built artifact includes templates; SMTP can be replaced without changing renderer/business callers. No arbitrary template path access. |
+| P05-A03 | Local SMTP accepts/rejects recipients, stalls after DATA, returns transient/permanent failures | Typed outcomes preserve partial/unknown acceptance; no false inbox claim, infinite retry, or regenerated action token. Local server is labelled local evidence. |
+| P05-A04 | Local/Firebase action flows: valid/expired/used/wrong-purpose links and hostile continue URL | Correct purpose/expiry/consumption and redirect policy; enumeration-safe public responses; action links absent from logs. Real Firebase-managed/custom-delivery behavior separately evidenced. |
+| P05-A05 | Same account on two installations; account switch; token rotation concurrent with dispatch | Authorized fan-out and binding generation hold on both databases; prior-account queued work is not delivered to the new owner. In-flight provider limitations documented. |
+| P05-A06 | Delayed invalid-token result arrives after token changed | Conditional cleanup preserves new token; credentials/payload errors do not delete active destinations. Both DB implementations pass. |
+| P05-A07 | FCM ordinary plus APNs VoIP on one installation | Purpose routing picks intended provider, no accidental double ordinary send; app/environment/topic checks reject incompatible combinations. |
+| P05-A08 | Provider 429/5xx/timeout/config-error/invalid-destination fixtures | Bounded retries honor expiry and retry-after, per-destination results remain truthful, unknown acceptance is explicit, secrets absent. |
+| P05-A09 | Authorized SMTP/domain and Firebase provider tests | Provider acceptance/configuration verified, inbox delivery separately observed if claimed; phone-only/Apple-relay cases covered or explicitly pending. |
+| P05-A10 | Real Android/iOS ordinary push plus iOS VoIP client | Record token rotation, foreground/background behavior, environment/topic/header correctness, logout/account-switch behavior and CallKit integration. Mock or provider receipt cannot replace device evidence. |
+| P05-A11 | Inspect captures, retained delivery jobs/backups, API summaries, logs and diagnostic artifacts after success/failure | No passwords, raw destinations, credentials or action links escape restricted stores; retained action payloads follow encryption/access/retention policy, queue views expose no secret bodies, and development capture fails production configuration. |
+
+Local exit: implemented mail/push contracts and DB/race tests pass with `implemented_local` status. Missing real provider/device acceptance is `external_acceptance_pending`. Full phase verification requires all selected required profiles, including FCM and direct APNs purposes, to have their own evidence. Related production action-email support is not declared ready before its real transport/setup passes.

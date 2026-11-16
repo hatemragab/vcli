@@ -1,0 +1,84 @@
+# Start work in the VCLI repository
+
+Prepared 16 November 2026. Status: standalone repository containing the planning package; CLI implementation has not started.
+
+## Repository setup
+
+The planning package has been copied into the root of its own `vcli` repository, with an independent Git history. This directory contains `AGENTS.md`, `docs/`, and `phases/`; begin work here. The original SuperUp checkout and planning copy are preserved.
+
+Only the planning documents were transferred. SuperUp Git history, application projects, environment files, provider credentials, private chat history, memories, local caches, containers, and global agent settings are not part of this repository. The owner authorized this repository setup and private GitHub publication separately from CLI implementation.
+
+The repository is named `vcli`. The npm package name and scope are still an owner decision; private GitHub hosting does not select an npm distribution policy or imply that `vcli` is available on a registry.
+
+## Read in this order
+
+1. [README.md](README.md): scope and navigation.
+2. [AGENTS.md](AGENTS.md): standalone contributor rules.
+3. [PRODUCT.md](docs/PRODUCT.md): full requested scope and phase mapping.
+4. [DECISIONS.md](docs/DECISIONS.md): current recommendations, rationale, and unresolved decisions.
+5. [ARCHITECTURE.md](docs/ARCHITECTURE.md): shared implementation contracts.
+6. [VERIFICATION.md](docs/VERIFICATION.md): evidence, compatibility, and phase completion rules.
+7. [Phase index](phases/README.md) and [status board](phases/STATUS.md).
+8. The selected phase's `README.md`, `TASKS.md`, and `ACCEPTANCE.md`.
+
+The archived original proposal is optional background. The active documents carry the requirements and current recommended design independently; an engineer does not need the old project or chat transcript.
+
+## What exists and what does not
+
+This package provides design contracts, task order, failure cases, and acceptance requirements for every phase. It contains no CLI implementation, package manifest, runtime library, container image, installed provider, generated production app, or successful runtime test.
+
+Proposed command names, TypeScript shapes, paths, and configuration examples describe the intended implementation. They are not commands that can already run. Exact dependency versions and platform API contracts must be verified and pinned during Phase 00 using current official documentation and a compatible local toolchain.
+
+## First implementation session
+
+Confirm that the working directory is the standalone VCLI repository and inspect its current instructions and Git status. Do not begin in the SuperUp application directories. If the destination has changed since this package was prepared, preserve those changes and reconcile the plan with the actual source.
+
+Start with [Phase 00](phases/00-design-baseline/README.md). Record the accepted baseline, exact toolchain and environment, and remaining owner decisions. Do not claim a design review completed merely because the tasks were written.
+
+The first code milestone is [Phase 01](phases/01-project-foundation/README.md), followed by [Phase 02](phases/02-safe-generation/README.md). It must prove a minimal generated application and a safe incremental addition before the larger provider catalog.
+
+Create only the directories needed for the active work. A possible future source layout appears in the architecture document; it is not an instruction to create every package or feature upfront.
+
+## Launch prompt for another engineer or agent
+
+Copy this prompt and replace the scope line with the phase or phases actually authorized:
+
+```text
+You are working in the standalone VCLI repository.
+
+Authorized scope: [for example, complete Phase 00 design baseline only; or,
+after its recorded gate, implement Phases 01 and 02].
+
+Read AGENTS.md, START-HERE.md, docs/PRODUCT.md, docs/DECISIONS.md,
+docs/ARCHITECTURE.md, docs/VERIFICATION.md, phases/STATUS.md, and the selected
+phase's README.md, TASKS.md and ACCEPTANCE.md.
+
+Verify the actual repository and environment. This planning package is not
+evidence that source, scripts, provider accounts, or deployments already exist.
+Use the recorded implementation baseline; identify material unresolved choices.
+Keep provider choices extendable through small contracts. Preserve one
+handwritten class per file and the documented owner boundaries.
+
+Work only within the authorized scope. Track completed tasks and actual
+acceptance evidence. Keep local/fake/provider/device/deployed results distinct.
+Do not silently remove unfinished providers from target scope, invent passing
+tests, copy credentials, modify an unrelated product, or publish/deploy without
+authorization for those actions.
+
+At completion, report files changed, commands actually run, test results,
+remaining gaps, and the next eligible phase. Do not ask for approval again
+for work already authorized; ask only for material missing decisions or
+permissions that are actually required.
+```
+
+## Status and evidence updates
+
+Task IDs use `P03-T01`; acceptance IDs use `P03-A01`. These are planned items until implementation supplies evidence. Check a task only after its deliverable exists. Link acceptance results to an identified revision, environment, command/run, and sanitized artifact.
+
+A phase may be implemented locally while external provider/device acceptance remains pending. It is not fully verified in that case. Later independent work can proceed when its documented entry conditions are satisfied and the user authorized it, but the missing acceptance remains visible and blocks related support claims.
+
+## Local operating constraints
+
+Engineers must use the current host's resource policy. For Hatem's present Orca VPS, the host rules include the shared 8 GiB budget, bounded workspace containers under the configured cgroup, at most two concurrent Playwright sessions, and authorization before a download batch exceeds 500 MB. Those are host constraints, not universal defaults to insert into generated NestJS projects. A physical phone or Mac-only build requires actual access to that machine/device.
+
+Do not transfer machine secrets or tools to make this document portable. Record missing infrastructure as setup requirements and use explicit development test doubles only where the phase permits them.
