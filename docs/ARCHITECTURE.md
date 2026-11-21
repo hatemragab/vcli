@@ -32,26 +32,28 @@ src/
   main.ts
   app.module.ts
   app.custom.module.ts              # developer-owned integration point
-  generated/                       # tool-owned registrations/config
+  generated/                        # tool-owned registration only
     vcli-app.module.ts
-  platform/                        # framework, SDK and infrastructure adapters
-  shared/                          # small stable pure types/helpers only
+  core/                             # shared config/auth/HTTP/database mechanisms
+    database/
+      base-repository.ts
+      database.ts                   # selected native connection only
+      repository-types.ts           # shared CRUD/pagination types
   modules/
     orders/
-      domain/                      # only when real domain behavior exists
-      application/                 # use cases and small ports
-      adapters/
-        inbound/http/
-        outbound/persistence/
-      public/                      # explicit cross-owner contracts
-      orders.module.ts
+      order.entity.ts               # entity and selected database definition
+      order.service.ts              # inherits shared CRUD; adds feature methods
+      order.module.ts               # Nest providers/exports
+      order.controller.ts           # only when HTTP endpoints are requested
 ```
 
-Generate only used layers and files. A name-only scaffold is unexposed and unfinished; it must not invent business policy, permissive authorization, or fake successful methods. A meaningful resource generator needs declared actor, input/output, persistence and operation contracts. Simple CRUD can remain small without empty domain directories or ceremonial mappers.
+The owner approved this compact structure after reviewing the layered reference. Generate only selected database implementations and useful files. Two independent hand-built references demonstrate MongoDB-only and PostgreSQL-only output; each contains only its selected implementation. `vcli init` selects one database and the chosen capabilities before any files are written. BaseRepository uses its selected native model/database directly. There is no Database union, runtime driver branch, RepositoryAdapter or dual-driver entity definition. Test doubles belong in tests rather than a selectable application memory backend. Services may use their selected database's types for specialized operations. There are no mandatory domain/application/adapters/ports/public folders or interfaces for every helper.
 
-One handwritten class per file applies to DTOs, controllers, services, repositories, modules and models. Related types, schemas, constants and pure helpers may share a cohesive file. Pure domain/application code does not import Nest, ORM/SDK types, environment globals or hidden I/O. Time, IDs and randomness enter through explicit boundaries. Factory providers compose dependencies where Nest decorators would otherwise leak into pure classes.
+One handwritten class per file applies to DTOs, controllers, services, repositories, modules and models. Related types, schemas, constants and helpers may share a cohesive file. Reuse the base repository for common CRUD; preserve owner-specific conditional/transactional operations where generic updates would weaken behavior. Controllers validate inputs, enforce access and call feature service methods. Generic inherited CRUD is not automatically exposed through HTTP.
 
-Each owner controls its persistence. Other modules use its public capabilities; they do not import private models, documents or table handles, even through type-only imports. Map inbound DTO → application input → domain/persistence shape explicitly. Do not require a giant generic repository or global shared service bag.
+Each feature owns its schema and persistence. Other features import deliberately exported services, not foreign model handles. Core imports no feature. File imports (including type-only edges) and feature dependency graphs must be acyclic. Put multi-feature orchestration above its dependencies or extract genuinely neutral shared facts. Never use forwardRef, ModuleRef, a locator, @Global, dynamic loading or barrel indirection to bypass this rule. Checks reject cycles and unavailable imports before builds.
+
+A feature scaffold must not invent business policy, permissive authorization or fake successful methods. Input, output, actor and persistence rules are explicit. Configuration validation, transaction coordination, pagination, authentication and safe errors are shared mechanisms; provider-specific behavior stays in focused implementation services.
 
 ### Nest registration is not provider visibility
 
@@ -73,7 +75,7 @@ Each implemented recipe declares:
 
 Use a simple dependency DAG, reject cycles and conflicting selections, and preserve compatible installed choices. Presets select recipes; they are not separate copies of the same starter. Capability flags describe actual independent guarantees, such as conditional object creation or retained realtime replay; avoid one arbitrary numeric rank that falsely orders unlike guarantees.
 
-Small ports are introduced where an implemented consumer needs them: principal verification, session authority, mail submission, push dispatch, realtime publication, object access, diagnostic reading. Provider SDK types stay inside adapters. Typed outcomes distinguish accepted/rejected/unavailable/unknown; an adapter cannot return success because a method exists.
+Small shared service contracts are introduced only for real consumers or interchangeable implementations, such as mail, storage and realtime. Ordinary Nest providers register the selected implementation. SDK mechanics stay in their focused services. Typed outcomes distinguish accepted/rejected/unavailable/unknown; having an implementation does not establish provider acceptance.
 
 No arbitrary external recipe execution initially. Installing an npm package can execute code through package scripts; do not describe third-party installation as sandboxed merely because templates are declarative.
 
@@ -129,7 +131,7 @@ Writing commands support preview and explicit noninteractive options. `--yes` ac
 
 ## Data, authentication and side effects
 
-Mongoose and Drizzle/pg adapters implement owner-specific atomic operations. UUIDv4 is the proposed public wire identity; generate at an application boundary. Pagination uses a declared stable sort tuple and unique tie-breaker, validated opaque versioned cursor, bounded limit, owner/filter scope. It is not a synchronization log; concurrent mutations have an explicitly limited consistency guarantee.
+The selected Mongoose or Drizzle/pg BaseRepository provides richer native CRUD/query helpers. Init emits one implementation and only its SDK dependencies. Shared method names do not imply a universal filter language: Mongo uses native filters/operators/populate, while PostgreSQL uses typed SQL conditions/joins and explicit upsert conflict targets. Owner services retain specialized atomic operations. UUIDv4 is the proposed public identity. Shared page pagination returns data, totalCount, totalPages, currentPage, hasNext and hasPrev, with bounded limits and stable ID ordering. Endpoint-specific ordering remains explicit; cursor pagination is added only for a real requirement. Pagination is not a synchronization log.
 
 Conditional updates handle single-record invariants. Operations spanning records use one explicit coordinator and opaque transaction context passed to all required participants; adapter-local checks bind it to the correct connection/database. Never fall back to sequential writes or implicitly start a second independent transaction. Mongo transaction recipes require the appropriate topology. Retry callbacks contain no external side effects.
 

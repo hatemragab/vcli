@@ -1,0 +1,50 @@
+{
+  "name": "@vcli/auth-runtime",
+  "version": "0.1.2",
+  "private": true,
+  "type": "module",
+  "description": "Narrow crypto mechanics for owner-controlled VCLI authentication",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=26.13.1 <27"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE-NOTICE.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./errors": {
+      "types": "./dist/errors.d.ts",
+      "import": "./dist/errors.js"
+    },
+    "./opaque": {
+      "types": "./dist/opaque.d.ts",
+      "import": "./dist/opaque.js"
+    },
+    "./password": {
+      "types": "./dist/password.d.ts",
+      "import": "./dist/password.js"
+    },
+    "./jwt": {
+      "types": "./dist/jwt.d.ts",
+      "import": "./dist/jwt.js"
+    }
+  },
+  "peerDependencies": {
+    "jose": "6.2.16",
+    "argon2": "0.45.2"
+  },
+  "peerDependenciesMeta": {
+    "jose": {
+      "optional": true
+    },
+    "argon2": {
+      "optional": true
+    }
+  }
+}

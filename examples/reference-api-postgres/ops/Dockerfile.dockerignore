@@ -1,0 +1,17 @@
+**
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.build.json
+!nest-cli.json
+!src/
+!src/**
+!scripts/
+!scripts/**
+!migrations/
+!migrations/**
+**/.env*
+**/*.pem
+**/*.key
+**/*service-account*.json
+**/var/**

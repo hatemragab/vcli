@@ -1,6 +1,6 @@
 # Phase 07 — Diagnostics and AI evidence
 
-**Status: Planned — implementation not started.** These are requirements; no collector, viewer, MCP integration, permission boundary, or E2E result is established by this phase document.
+**Status: implementation in progress; named acceptance gates remain open.** These are requirements; no collector, viewer, MCP integration, permission boundary, or E2E result is established by this phase document.
 
 Read [START-HERE](../../START-HERE.md), [phase status](../STATUS.md), [product scope](../../docs/PRODUCT.md), [architecture](../../docs/ARCHITECTURE.md), [decisions](../../docs/DECISIONS.md), and [verification](../../docs/VERIFICATION.md). Follow [TASKS.md](TASKS.md) and [ACCEPTANCE.md](ACCEPTANCE.md).
 
@@ -12,7 +12,9 @@ Earlier phases establish structured logging, correlation, configuration, the tes
 
 ## Scope and topology
 
-The local reference profile routes allowlisted application events and selected infrastructure logs through Vector normalization/redaction into bounded, rotated JSONL. A small reader queries retained files. Logdy receives a supported live feed; its live buffer is not the historical query database. A read-only MCP facade queries retained evidence and test results. Verify the feed adapter rather than inferring support from an ingestion endpoint.
+The local reference profile uses one shared structured application logger, which validates/allowlists events before writing bounded, rotated JSONL. Vector reads those sanitized files, normalizes/revalidates them and forwards a supported live feed to Logdy. A small reader queries the retained application files directly, so local history and offline MCP queries remain available while collector/viewer services are stopped. Logdy's live buffer is not the historical query database. The hand-built examples implement this application-only topology; they are separate from generator phase completion.
+
+Selected worker/database/infrastructure sources must declare their own parse/redaction, bounded retention, permissions and coverage. They do not become covered merely because the application Vector profile exists, and raw statements/parameters are not implicitly enabled. A read-only MCP facade queries selected retained evidence and, when implemented, test results. Verify the feed adapter rather than inferring support from an ingestion endpoint.
 
 Collector/viewer failures remain bounded and do not prevent business operations. VCLI builds neither a general log database nor a custom supervisor. Development wrappers delegate watching/startup to Nest/package scripts and Compose or selected native service commands. They track task-owned processes, forward signals, preserve state, and report conflicts with independently started services.
 

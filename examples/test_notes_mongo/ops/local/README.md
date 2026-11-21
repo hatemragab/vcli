@@ -1,0 +1,11 @@
+# Selected local services
+
+The project API runs through the installed local Nest CLI, without a VCLI watcher/supervisor. Use the pinned project CLI dev/service commands after installation. An explicit environment development/test, private APP_ENV_FILE and selected port are required; process environment overrides the file. No host scan, auto install or provider setup occurs.
+
+The matching ops/local/development or ops/local/test immutable profile manages only the selected native database. ops/local/compose.yaml and service-plan.json remain development aliases. Services bind 127.0.0.1, have explicit CPU/memory/PID caps and distinct environment volume names. VCLI_CGROUP_PARENT or the command cgroupParent option can select a host-specific parent; portable files assume none. Compose service wrappers validate project ownership before mutation; ordinary down never passes --volumes, removes images or rotates credentials.
+
+MongoDB is a development-only unauthenticated loopback replica set. service up explicitly runs the bounded setup-profile database-init after process health, then checks writable-primary readiness. For the host API use mongodb://127.0.0.1:<selected-port>/app?replicaSet=rs0&directConnection=true. The fixed internal member database:27017 supports the container; directConnection is required from the host. No transactional production MongoDB provisioning is implied.
+
+APP_ENV_FILE is for the API; Compose interpolation uses explicitly supplied process environment (VCLI_POSTGRES_PASSWORD/VCLI_DATABASE_PORT), never implicitly loads API/private .env files. Environment/service-plan JSON contains only names/metadata. Run schema/release initialization explicitly after service readiness and before application startup; ordinary dev does not initialize schemas.
+
+External providers/Centrifugo and optional native diagnostic tools are declared in service-plan.json and are configured separately through their selected owner assets. No Redis/queue daemon or host-gateway viewer topology is invented. API health does not prove those external dependencies. Stop task-owned dev with SIGINT/SIGTERM; wrappers forward only to their owned process group and release their lock, never kill another process by name or port.

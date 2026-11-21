@@ -1,6 +1,6 @@
 # Phase 01 — Project foundation
 
-**Status: Planned. Implementation has not started.** This phase describes proposed implementation work; this documentation is not evidence that a CLI or generated application exists.
+**Status: implemented locally for the private Linux bootstrap profile.** See [per-ID evidence](../../docs/CLI-VERIFICATION.md#phase-acceptance-mapping). This phase describes proposed implementation work; this documentation is not evidence that a CLI or generated application exists.
 
 Read [START-HERE](../../START-HERE.md), [product scope](../../docs/PRODUCT.md), [architecture](../../docs/ARCHITECTURE.md), [decisions](../../docs/DECISIONS.md), and [verification](../../docs/VERIFICATION.md). Track progress in the [phase status board](../STATUS.md), execute [TASKS](TASKS.md) in order, and retain evidence against [ACCEPTANCE](ACCEPTANCE.md).
 
@@ -22,15 +22,15 @@ The generated application uses strict TypeScript, one class per handwritten clas
 
 ## Generated files and ownership
 
-| Area | Ownership and purpose |
-| --- | --- |
-| `src/main.ts`, `src/app.module.ts` | Generated once, then developer-owned bootstrap and root composition. |
-| `src/app.custom.module.ts` | Generated once, developer-owned extension module with explicit imports/exports. |
-| `src/generated/vcli-app.module.ts` | Tool-owned, deterministic registration of selected infrastructure modules. |
+| Area                                                   | Ownership and purpose                                                                                |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `src/main.ts`, `src/app.module.ts`                     | Generated once, then developer-owned bootstrap and root composition.                                 |
+| `src/app.custom.module.ts`                             | Generated once, developer-owned extension module with explicit imports/exports.                      |
+| `src/generated/vcli-app.module.ts`                     | Tool-owned, deterministic registration of selected infrastructure modules.                           |
 | `src/platform/config/`, `http/`, `logging/`, `health/` | Readable foundation code; ownership is recorded per managed file, not inferred from every directory. |
-| `README.md`, `AGENTS.md`, architecture guide | Short selected-project guidance with explicit managed sections and developer extension areas. |
-| Environment examples and `.gitignore` | Document safe names/defaults; ignore private environments, local state, and diagnostic artifacts. |
-| Package scripts and lockfiles | Pin supported local tooling; distinguish CLI metadata from the package manager's lockfile. |
+| `README.md`, `AGENTS.md`, architecture guide           | Short selected-project guidance with explicit managed sections and developer extension areas.        |
+| Environment examples and `.gitignore`                  | Document safe names/defaults; ignore private environments, local state, and diagnostic artifacts.    |
+| Package scripts and lockfiles                          | Pin supported local tooling; distinguish CLI metadata from the package manager's lockfile.           |
 
 The root imports generated and custom modules explicitly. Root-level registration does not make providers available to sibling feature modules. No root `@Global()` module, service locator, or dynamic folder scan should conceal that boundary. Future generators must declare consumers' required module imports.
 

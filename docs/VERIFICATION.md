@@ -1,19 +1,19 @@
 # Verification and support claims
 
-**Status: Planned. Implementation has not started.** No compatibility profile, generated application, provider flow, device interaction, or deployment is verified by this planning package. Exact versions, test runner, and executable verification scripts are selected and recorded in Phase 00; command examples elsewhere are proposed interfaces.
+**Implementation active.** The [private bootstrap record](CLI-VERIFICATION.md) identifies the generated-app gates already exercised. This general policy is not evidence that other providers, devices or deployments passed. Exact versions, test runner, and executable verification scripts are selected and recorded in Phase 00; command examples elsewhere are proposed interfaces.
 
 Read [PRODUCT](PRODUCT.md), [DECISIONS](DECISIONS.md), [ARCHITECTURE](ARCHITECTURE.md), the selected phase's acceptance register, and [STATUS](../phases/STATUS.md). Evidence supports an identified behavior in an identified environment; it is not a timeless green flag for the product.
 
 ## Evidence levels
 
-| Level | What it can establish | What it cannot establish |
-| --- | --- | --- |
-| Documentation/static | Valid schemas/output, compilation, lint, measured dependency boundaries. | Runtime behavior, persistence integrity, or delivery. |
-| Unit/fake contract | Policy, adapter translation, deterministic failure/interleaving under controlled inputs. | Real database concurrency or external provider behavior. |
-| Generated application | Actual dependency installation, compilation/build, boot, and exercised application assertions, recorded separately. | Untested providers, client platforms, or deployment topology. |
-| Local real infrastructure | Exercised MongoDB/PostgreSQL/service behavior in the declared isolated topology. | Production operation or native-device interaction. |
-| Provider/client/device | Actual configured provider acceptance and separately observed client/device outcomes. | Inbox/display/background behavior that was not observed. |
-| Deployed/operational | Identified release, services, routing, state, and exercised recovery under the named platform/profile. | Other targets, capacity, restore paths, or security properties not tested. |
+| Level                     | What it can establish                                                                                               | What it cannot establish                                                   |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Documentation/static      | Valid schemas/output, compilation, lint, measured dependency boundaries.                                            | Runtime behavior, persistence integrity, or delivery.                      |
+| Unit/fake contract        | Policy, adapter translation, deterministic failure/interleaving under controlled inputs.                            | Real database concurrency or external provider behavior.                   |
+| Generated application     | Actual dependency installation, compilation/build, boot, and exercised application assertions, recorded separately. | Untested providers, client platforms, or deployment topology.              |
+| Local real infrastructure | Exercised MongoDB/PostgreSQL/service behavior in the declared isolated topology.                                    | Production operation or native-device interaction.                         |
+| Provider/client/device    | Actual configured provider acceptance and separately observed client/device outcomes.                               | Inbox/display/background behavior that was not observed.                   |
+| Deployed/operational      | Identified release, services, routing, state, and exercised recovery under the named platform/profile.              | Other targets, capacity, restore paths, or security properties not tested. |
 
 Passing with fakes is useful; label it accurately. A provider accepting an email/push request is not proof of inbox/device delivery. A successful build is not a boot or interaction. A healthy container is not evidence that durable state survived redeployment.
 
@@ -21,16 +21,16 @@ Passing with fakes is useful; label it accurately. A provider accepting an email
 
 Maintain concrete version tuples and separate rows when profiles differ. Initially every row below is **planned/unverified**; recommendations are not owner-approved pins or tested versions.
 
-| Profile group | Required coverage |
-| --- | --- |
-| CLI/foundation | Supported host/toolchain tuple; source-only init, installation, build/boot, explicit module visibility. |
-| Firebase × MongoDB | Real persistence/security contracts plus independently recorded external Firebase-method/client evidence. |
-| Firebase × PostgreSQL | Same advertised contracts using its actual constraints and transactions. |
-| Local auth × MongoDB | Registration/session/refresh/action lifecycle using real persistence and declared capture/mail evidence. |
-| Local auth × PostgreSQL | Same promised invariants with the SQL adapter and reviewed migrations. |
-| Realtime | Socket.IO, Centrifugo, and native WebSocket separately; single/multi-instance and admission modes separately. |
-| Mail/push/storage | Capture versus SMTP; FCM/APNs purposes and devices; local/AWS/named compatible storage modes separately. |
-| Diagnostics/deployment | Local/remote evidence permissions and retention; each Dokploy/Coolify/CapRover topology and artifact/operator mode. |
+| Profile group           | Required coverage                                                                                                   |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| CLI/foundation          | Supported host/toolchain tuple; source-only init, installation, build/boot, explicit module visibility.             |
+| Firebase × MongoDB      | Real persistence/security contracts plus independently recorded external Firebase-method/client evidence.           |
+| Firebase × PostgreSQL   | Same advertised contracts using its actual constraints and transactions.                                            |
+| Local auth × MongoDB    | Registration/session/refresh/action lifecycle using real persistence and declared capture/mail evidence.            |
+| Local auth × PostgreSQL | Same promised invariants with the SQL adapter and reviewed migrations.                                              |
+| Realtime                | Socket.IO, Centrifugo, and native WebSocket separately; single/multi-instance and admission modes separately.       |
+| Mail/push/storage       | Capture versus SMTP; FCM/APNs purposes and devices; local/AWS/named compatible storage modes separately.            |
+| Diagnostics/deployment  | Local/remote evidence permissions and retention; each Dokploy/Coolify/CapRover topology and artifact/operator mode. |
 
 Exercise the full four-way authentication/database matrix early in Phase 03. Two diagonal examples cannot establish independent selections. Use shared behavior contracts without pretending both databases implement arbitrary queries identically.
 

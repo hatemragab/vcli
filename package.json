@@ -1,0 +1,59 @@
+{
+  "name": "@vcli/cli",
+  "version": "0.1.2",
+  "private": true,
+  "type": "module",
+  "description": "Private local NestJS project generator in Hatem coding style",
+  "bin": {
+    "vcli": "bin/vcli.mjs"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "templates",
+    "README.md",
+    "LICENSE-NOTICE.md",
+    "runtime-packages"
+  ],
+  "engines": {
+    "node": ">=26.13.1 <27"
+  },
+  "packageManager": "npm@11.20.0",
+  "scripts": {
+    "build": "tsc && node scripts/build-runtime-assets.ts",
+    "typecheck": "tsc --noEmit",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
+    "lint": "eslint src test scripts/*.ts",
+    "format:check": "prettier --check src test scripts/*.ts *.json docs/CLI-*.md docs/agent-prompts/cli-*.md",
+    "check": "npm run format:check && npm run lint && npm run check:architecture && npm run typecheck && npm run typecheck:tests && npm run check --workspace @vcli/auth-runtime",
+    "test": "node --test --test-concurrency=1 test/*.test.ts",
+    "check:architecture": "node scripts/check-architecture.ts",
+    "prebuild": "npm run check:architecture && npm run build:auth",
+    "build:auth": "npm run build --workspace @vcli/auth-runtime"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "8.7.5",
+    "commander": "15.0.0",
+    "prettier": "3.10.1",
+    "typescript": "6.0.3",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@aws-sdk/s3-presigned-post": "3.1164.0",
+    "@eslint/js": "10.0.1",
+    "@socket.io/mongo-adapter": "0.4.0",
+    "@socket.io/postgres-adapter": "0.5.0",
+    "@types/node": "26.6.6",
+    "centrifuge": "5.8.0",
+    "dotenv": "18.0.10",
+    "eslint": "10.15.0",
+    "firebase": "13.4.0",
+    "mongodb": "7.8.0",
+    "pg": "8.23.1",
+    "socket.io-client": "4.8.4",
+    "typescript-eslint": "8.73.0"
+  },
+  "workspaces": [
+    "packages/auth-runtime"
+  ]
+}

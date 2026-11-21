@@ -1,6 +1,6 @@
 # Phase 05 — Email, installations and push
 
-**Status: Planned — implementation not started.** This phase completes delivery integrations and evidence; it does not claim SMTP inbox delivery or device notification acceptance.
+**Status: implementation in progress; named acceptance gates remain open.** This phase completes delivery integrations and evidence; it does not claim SMTP inbox delivery or device notification acceptance.
 
 Read [START-HERE](../../START-HERE.md), [PRODUCT](../../docs/PRODUCT.md), [ARCHITECTURE](../../docs/ARCHITECTURE.md), [DECISIONS](../../docs/DECISIONS.md), [VERIFICATION](../../docs/VERIFICATION.md), [TASKS](TASKS.md), [ACCEPTANCE](ACCEPTANCE.md), and [STATUS](../STATUS.md). Prerequisites: [Phase 02](../02-safe-generation/README.md) capture-mail contract and [Phase 03](../03-authentication-databases/README.md) account/session/installation authority. Realtime is independent, not required.
 
@@ -14,11 +14,11 @@ Proposed commands are `vcli add mail --driver smtp`, `vcli add push --driver fcm
 
 Separate three decisions:
 
-| Choice | Responsibility |
-| --- | --- |
-| Application mail enabled | Whether business operations may submit mail through an internal capability |
-| Auth email workflow | Local action tokens, Firebase-managed actions, or application delivery of Firebase-generated action links |
-| Delivery provider | Development capture, SMTP, or later HTTP implementation |
+| Choice                   | Responsibility                                                                                            |
+| ------------------------ | --------------------------------------------------------------------------------------------------------- |
+| Application mail enabled | Whether business operations may submit mail through an internal capability                                |
+| Auth email workflow      | Local action tokens, Firebase-managed actions, or application delivery of Firebase-generated action links |
+| Delivery provider        | Development capture, SMTP, or later HTTP implementation                                                   |
 
 Rendering belongs to a provider-neutral mail module. Template selection, HTML escaping, plain-text alternatives, locale/variable validation and asset copying must work without SMTP installed. Do not accept arbitrary client template paths, sender headers or continuation URLs. Business callers depend on small typed submissions; no raw Nodemailer/Firebase response or general public send-email endpoint.
 

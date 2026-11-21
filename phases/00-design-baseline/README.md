@@ -1,6 +1,6 @@
 # Phase 00 — Design baseline and standalone setup
 
-**Status: Planned — not completed by writing this plan.** This phase establishes the decisions and evidence needed for implementation. No implementation, download, provider registration or deployment is authorized merely by this document.
+**Status: baseline review complete for private local implementation.** See [evidence](../../docs/CLI-BASELINE.md#phase00-review-evidence). This phase establishes the decisions and evidence needed for implementation. No implementation, download, provider registration or deployment is authorized merely by this document.
 
 Read [START-HERE](../../START-HERE.md), [PRODUCT](../../docs/PRODUCT.md), [ARCHITECTURE](../../docs/ARCHITECTURE.md), [DECISIONS](../../docs/DECISIONS.md), [VERIFICATION](../../docs/VERIFICATION.md), then [TASKS](TASKS.md) and [ACCEPTANCE](ACCEPTANCE.md).
 

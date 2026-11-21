@@ -1,0 +1,61 @@
+{
+  "http_server": {
+    "port": 8000,
+    "internal_port": "9000"
+  },
+  "engine": {
+    "type": "memory"
+  },
+  "client": {
+    "allowed_origins": ["http://127.0.0.1:3100"],
+    "connection_limit": 128,
+    "user_connection_limit": 16,
+    "queue_max_size": 65536,
+    "channel_limit": 1,
+    "stale_close_delay": "3s",
+    "proxy": {
+      "connect": {
+        "enabled": true,
+        "endpoint": "http://host.docker.internal:3100/api/realtime/centrifugo/connect",
+        "timeout": "3s",
+        "http_headers": [],
+        "emulated_headers": []
+      },
+      "refresh": {
+        "enabled": true,
+        "endpoint": "http://host.docker.internal:3100/api/realtime/centrifugo/refresh",
+        "timeout": "3s",
+        "http_headers": [],
+        "emulated_headers": []
+      }
+    },
+    "expired_close_delay": "1s"
+  },
+  "channel": {
+    "namespaces": [
+      {
+        "name": "private",
+        "allow_subscribe_for_client": false,
+        "allow_publish_for_client": false
+      }
+    ]
+  },
+  "websocket": {
+    "message_size_limit": 16384
+  },
+  "http_api": {
+    "key": ""
+  },
+  "health": {
+    "enabled": true
+  },
+  "admin": {
+    "enabled": false
+  },
+  "debug": {
+    "enabled": false
+  },
+  "log": {
+    "level": "error"
+  }
+}

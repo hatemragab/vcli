@@ -1,6 +1,23 @@
 # Start work in the VCLI repository
 
-Prepared 16 November 2026. Status: standalone repository containing the planning package; CLI implementation has not started.
+The CLI source under `src/` is the current implementation. Planning documents, phase task lists and files under `docs/archive/` and `docs/agent-prompts/` are historical or local review context. Ignored evidence under `var/` is local and is not a phase result. Hosted provider, device and deployment acceptance remain pending. Do not start new work at Phase 00.
+
+## Task to file to check
+
+| Task | Start here | Check |
+| --- | --- | --- |
+| Change an init choice or default | `src/commands/generation-workflows.ts`, `src/commands/selection-options.ts`, `src/recipes/catalog.ts` | `node --test test/cli.test.ts` after `npm run build` |
+| Diagnose a write, drift or recovery | `src/engine/planning.ts`, `src/engine/apply-plan.ts`, `src/engine/recovery.ts` | `node --test test/engine.test.ts` |
+| Change generated username auth | `src/recipes/render-identity.ts`, `templates/runtime/common/src/modules/identity/username-credentials.service.ts` | `node --test test/username-rendering.test.ts` |
+| Follow a note request | generated `src/modules/notes/notes.controller.ts`, service, entity | `node --test test/notes-example-runtime.test.ts` |
+| Trace a runtime failure | generated `src/main.ts`, `src/create-app.ts`, `src/modules/diagnostics/diagnostic-reader.service.ts` | `node --test test/cli-operations.test.ts` |
+| Explain one generated file | `vcli explain <path>` | owner, renderer and the printed check |
+| Validate private config | `vcli config check --config-file <file>` | names and the next command only |
+| Find a request | `vcli logs query --request-id <uuid>` | retained reader, after `npm run build` |
+
+`npm test` uses the built `dist`. An installed-bin check runs `./bin/vcli.mjs` and is the one that can see Node flag handling. Direct handler tests cannot.
+
+Prepared 16 November 2026. Status: standalone repository containing the planning package and owner-authorized independent hand-built references under `examples/reference-api` (MongoDB) and `examples/reference-api-postgres` (PostgreSQL); the private CLI and selected catalog are implemented, with local acceptance and pending external resources recorded per profile.
 
 ## Repository setup
 
@@ -25,15 +42,15 @@ The archived original proposal is optional background. The active documents carr
 
 ## What exists and what does not
 
-This package provides design contracts, task order, failure cases, and acceptance requirements for every phase. It contains no CLI implementation, package manifest, runtime library, container image, installed provider, generated production app, or successful runtime test.
+This package provides design contracts, task order, failure cases, and acceptance requirements for every phase. The separate MongoDB and PostgreSQL projects under [examples](examples/README.md) are owner-authorized hand-built expected-output references. Each contains one native database; package manifests, implementation and recorded checks belong to that individual reference. Native database, HTTP/protocol and browser/restart acceptance passed separately in each reference; earlier combined-catalog checks remain historical. It is not CLI-generated output or proof of CLI phase completion. The repository now contains the private CLI, selected runtime templates, narrow authentication workspace and native operations; it has no published npm release or generated production deployment. Read the reference's own verification record for actual runtime evidence.
 
-Proposed command names, TypeScript shapes, paths, and configuration examples describe the intended implementation. They are not commands that can already run. Exact dependency versions and platform API contracts must be verified and pinned during Phase 00 using current official documentation and a compatible local toolchain.
+Commands listed by the current CLI --help are executable. Service/operator/maintenance commands follow their recorded profile and acceptance limits; planning examples alone do not make them executable. Phase 00 is historical baseline context. Current dependency pins live in the repository manifests.
 
 ## First implementation session
 
 Confirm that the working directory is the standalone VCLI repository and inspect its current instructions and Git status. Do not begin in the SuperUp application directories. If the destination has changed since this package was prepared, preserve those changes and reconcile the plan with the actual source.
 
-Start with [Phase 00](phases/00-design-baseline/README.md). Record the accepted baseline, exact toolchain and environment, and remaining owner decisions. Do not claim a design review completed merely because the tasks were written.
+Use the task map above for current CLI work. [Phase 00](phases/00-design-baseline/README.md) records the accepted baseline and is historical. Do not claim a design review completed merely because the tasks were written.
 
 The first code milestone is [Phase 01](phases/01-project-foundation/README.md), followed by [Phase 02](phases/02-safe-generation/README.md). It must prove a minimal generated application and a safe incremental addition before the larger provider catalog.
 

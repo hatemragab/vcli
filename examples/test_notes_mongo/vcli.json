@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "name": "test_notes_mongo",
+    "packageManager": "npm"
+  },
+  "capabilities": {
+    "auth": {
+      "recipe": "auth.local",
+      "options": {
+        "identifier": "username"
+      }
+    },
+    "database": {
+      "recipe": "database.mongodb",
+      "options": {}
+    },
+    "diagnostics": {
+      "recipe": "diagnostics.local",
+      "options": {
+        "logdy": false,
+        "mcp": false,
+        "reader": "local-same-user",
+        "sources": [
+          "application",
+          "database",
+          "infrastructure"
+        ],
+        "testCapture": false,
+        "vector": false
+      }
+    },
+    "foundation": {
+      "recipe": "foundation.nest",
+      "options": {}
+    },
+    "media": {
+      "recipe": "media.private",
+      "options": {
+        "modes": [
+          "mediated"
+        ]
+      }
+    },
+    "notes": {
+      "recipe": "example.notes",
+      "options": {}
+    },
+    "storage": {
+      "recipe": "storage.local",
+      "options": {}
+    }
+  }
+}

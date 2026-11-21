@@ -1,6 +1,6 @@
 # Phase 03 — Authentication and databases
 
-**Status:** Planned — implementation not started.
+**Status: implementation in progress; named acceptance gates remain open.** Planned — implementation not started.
 
 This is a planning baseline for engineering review, not a claim that its proposed policies are user-approved or implemented. Read [START-HERE](../../START-HERE.md), [PRODUCT](../../docs/PRODUCT.md), [ARCHITECTURE](../../docs/ARCHITECTURE.md), [DECISIONS](../../docs/DECISIONS.md), and [VERIFICATION](../../docs/VERIFICATION.md). Follow the [status board](../STATUS.md). The prerequisite is [Phase 02](../02-safe-generation/README.md), including its generated foundation and restricted development mail capture.
 
@@ -22,13 +22,13 @@ Generate application UUIDv4 identifiers through an injected boundary; supply IDs
 
 Keep these concepts distinct even when related records share a transaction:
 
-| Owner data | Required facts and invariant |
-| --- | --- |
-| Account / identity binding | Application ID, active/disabled/deleted state, unique provider/project/subject mapping; local canonical email uniqueness. Never merge identities by matching email text alone. |
-| Installation | Application/environment/platform, stable installation reference and ownership generation. Claimed installation metadata does not prove hardware identity. |
-| Session | Account, installation/generation, identity method, recent-auth facts, expiry and revocation. Several connections may share one session. |
-| Local credential / refresh family | Password hash/version; hashed opaque refresh credentials, family/generation, consumed/revoked state and expiry. Family reuse cannot revoke an unrelated newer login. |
-| Action / provider intent | Hashed one-use reset/verification token and purpose; durable provider revoke/delete intent with guarded ownership and retry state. |
+| Owner data                        | Required facts and invariant                                                                                                                                                   |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Account / identity binding        | Application ID, active/disabled/deleted state, unique provider/project/subject mapping; local canonical email uniqueness. Never merge identities by matching email text alone. |
+| Installation                      | Application/environment/platform, stable installation reference and ownership generation. Claimed installation metadata does not prove hardware identity.                      |
+| Session                           | Account, installation/generation, identity method, recent-auth facts, expiry and revocation. Several connections may share one session.                                        |
+| Local credential / refresh family | Password hash/version; hashed opaque refresh credentials, family/generation, consumed/revoked state and expiry. Family reuse cannot revoke an unrelated newer login.           |
+| Action / provider intent          | Hashed one-use reset/verification token and purpose; durable provider revoke/delete intent with guarded ownership and retry state.                                             |
 
 Notification destinations are a separate ownership contract completed in Phase 05. This phase supplies installation/session invalidation capabilities; it does not invent FCM delivery.
 

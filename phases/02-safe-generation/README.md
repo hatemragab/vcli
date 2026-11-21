@@ -1,6 +1,6 @@
 # Phase 02 — Safe incremental generation
 
-**Status: Planned. Implementation has not started.** The commands and contracts below describe future behavior, not existing tools or passing checks.
+**Status: implemented locally for the private Linux bootstrap profile.** See [per-ID evidence](../../docs/CLI-VERIFICATION.md#phase-acceptance-mapping). The commands and contracts below describe future behavior, not existing tools or passing checks.
 
 Start with [START-HERE](../../START-HERE.md), [product scope](../../docs/PRODUCT.md), [architecture](../../docs/ARCHITECTURE.md), [decisions](../../docs/DECISIONS.md), and [verification](../../docs/VERIFICATION.md). Use [TASKS](TASKS.md), [ACCEPTANCE](ACCEPTANCE.md), and the [status board](../STATUS.md).
 

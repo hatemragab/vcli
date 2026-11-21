@@ -1,0 +1,83 @@
+{
+  'services':
+    {
+      'database':
+        {
+          'restart': 'unless-stopped',
+          'mem_limit': '512m',
+          'cpus': 1,
+          'pids_limit': 128,
+          'cgroup_parent': '${VCLI_CGROUP_PARENT:-}',
+          'labels':
+            {
+              'io.vcli.project': 'test_notes_mongo',
+              'io.vcli.environment': 'test',
+            },
+          'image': 'mongo:8.0.38',
+          'command': ['mongod', '--replSet', 'rs0', '--bind_ip_all'],
+          'ports':
+            [
+              {
+                'target': 27017,
+                'published': '${VCLI_DATABASE_PORT:-27017}',
+                'host_ip': '127.0.0.1',
+                'protocol': 'tcp',
+              },
+            ],
+          'volumes': ['database-data:/data/db'],
+          'healthcheck':
+            {
+              'test':
+                [
+                  'CMD',
+                  'mongosh',
+                  '--quiet',
+                  '--eval',
+                  'quit(db.adminCommand({ping:1}).ok ? 0 : 1)',
+                ],
+              'interval': '5s',
+              'timeout': '5s',
+              'retries': 12,
+              'start_period': '10s',
+            },
+        },
+      'database-init':
+        {
+          'restart': 'no',
+          'mem_limit': '512m',
+          'cpus': 1,
+          'pids_limit': 128,
+          'cgroup_parent': '${VCLI_CGROUP_PARENT:-}',
+          'labels':
+            {
+              'io.vcli.project': 'test_notes_mongo',
+              'io.vcli.environment': 'test',
+            },
+          'image': 'mongo:8.0.38',
+          'profiles': ['setup'],
+          'depends_on': { 'database': { 'condition': 'service_healthy' } },
+          'command':
+            [
+              'mongosh',
+              '--host',
+              'database:27017',
+              '--quiet',
+              '--eval',
+              "try { const s=rs.status(); if(s.set!=='rs0') quit(2); } catch(e) { if(e.code!==94) throw e; rs.initiate({_id:'rs0',members:[{_id:0,host:'database:27017'}]}); }",
+            ],
+        },
+    },
+  'volumes':
+    {
+      'database-data':
+        {
+          'name': 'test-notes-mongo-test-database-data-ab8e1b0040b73748',
+          'labels':
+            {
+              'io.vcli.project': 'test_notes_mongo',
+              'io.vcli.environment': 'test',
+              'io.vcli.workspace': '${VCLI_WORKSPACE_ID:?Use the pinned project service command}',
+            },
+        },
+    },
+}

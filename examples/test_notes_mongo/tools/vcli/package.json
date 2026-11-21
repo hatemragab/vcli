@@ -1,0 +1,19 @@
+{
+  "name": "@vcli/cli",
+  "version": "0.1.2",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "vcli": "bin/vcli.mjs"
+  },
+  "engines": {
+    "node": ">=26.13.1 <27"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "8.7.5",
+    "commander": "15.0.0",
+    "prettier": "3.10.1",
+    "typescript": "6.0.3",
+    "zod": "4.6.7"
+  }
+}

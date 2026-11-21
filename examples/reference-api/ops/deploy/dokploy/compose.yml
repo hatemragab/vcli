@@ -1,0 +1,23 @@
+services:
+  api:
+    image: ${REFERENCE_IMAGE:?Set the reviewed registry image digest}
+    env_file: [../../../.env.production]
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: '3100'
+      LOCAL_STORAGE_ROOT: /app/var/storage
+      EVIDENCE_DIRECTORY: /app/var/evidence
+    expose: ['3100']
+    volumes: [uploads:/app/var/storage, evidence:/app/var/evidence]
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
+    stop_grace_period: 15s
+    restart: unless-stopped
+    logging:
+      driver: local
+      options: { max-size: 5m, max-file: '2' }
+volumes:
+  uploads: { external: true, name: reference-api-uploads }
+  evidence: { external: true, name: reference-api-evidence }

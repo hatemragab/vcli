@@ -1,0 +1,11 @@
+{
+  "profile": "restricted-remote-read",
+  "endpoint": "http://127.0.0.1:58234/v1/diagnostics/query",
+  "readToken": "",
+  "grant": {
+    "project": "generated-api",
+    "environment": "test",
+    "runs": []
+  },
+  "timeoutMs": 2000
+}

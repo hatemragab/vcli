@@ -1,0 +1,24 @@
+{
+  "kind": "hand-built-expected-output-reference",
+  "generatorImplemented": false,
+  "authenticationProfiles": ["firebase", "local"],
+  "firebaseMethods": ["password", "phone", "google.com", "apple.com"],
+  "storageProfiles": ["local", "s3-aws", "s3-r2"],
+  "realtimeProfiles": ["socketio", "ws", "centrifugo"],
+  "mailProfiles": ["capture-development-only", "smtp"],
+  "pushPurposes": ["ordinary", "background", "voip-internal-authorized-use"],
+  "unsupportedReferenceModes": [
+    "custom-s3-endpoints",
+    "presigned-uploads",
+    "multipart-uploads",
+    "multi-instance-runtime",
+    "remote-diagnostics"
+  ],
+  "deploymentArtifacts": ["dokploy", "coolify", "caprover"],
+  "externalAcceptance": "pending",
+  "architecture": "flat-nest-modules",
+  "circularDependencies": "rejected-at-check-and-build",
+  "database": "postgres",
+  "databaseSelection": "fixed-at-project-initialization",
+  "nativeReferenceAcceptance": "pending-fresh-coordinator-build-and-runtime-checks"
+}

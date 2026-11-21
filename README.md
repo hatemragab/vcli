@@ -1,51 +1,87 @@
-# VCLI — standalone project and implementation plan
+# VCLI
 
-VCLI will generate ordinary NestJS projects in Hatem's coding style, remember project choices, and safely add capabilities later. Developers and AI agents will use the same generators, documentation, and verification commands.
+VCLI creates and maintains NestJS backends in Hatem Ragab’s coding style. Start with a small HTTP API or choose a database and capabilities at initialization. As the app grows, use its pinned CLI to preview changes, scaffold features, check ownership, and verify the result.
 
-**Status: planning only.** This package contains the full proposed delivery plan; the CLI and integrations have not been implemented. No phase is complete merely because its documents exist.
+The generated project is ordinary NestJS. It uses flat feature modules, strict TypeScript, one handwritten class per file, explicit dependency injection, and one native database implementation when selected. Nest runs the application. VCLI handles development and release tasks from the project checkout.
 
-## Start here
+## Quick start
 
-This is the standalone VCLI repository. Read [START-HERE.md](START-HERE.md) to launch an implementation session here. The planning documents live at the repository root; no SuperUp source, credentials, milestones, or private conversation history are required.
+Use Node 26.13.1 or newer within Node 26, npm 11.20.0, and Make. Download `vcli-cli-0.1.2.tgz` from the [private GitHub release](https://github.com/hatemragab/vcli/releases/tag/v0.1.2). From a parent directory where you keep projects, install the tarball and create a minimal API.
 
-| Document | Purpose |
-| --- | --- |
-| [Product scope](docs/PRODUCT.md) | Everything requested, provider choices, and requirement-to-phase mapping |
-| [Architecture](docs/ARCHITECTURE.md) | Shared contracts, ownership, configuration, and coding structure |
-| [Decisions](docs/DECISIONS.md) | Recommended defaults, rationale, and unresolved choices |
-| [Verification](docs/VERIFICATION.md) | Evidence levels, support matrix, and completion gates |
-| [Review synthesis](docs/REVIEW-SYNTHESIS.md) | Which review ideas were retained, corrected, or deferred |
-| [References](docs/REFERENCES.md) | Official documentation to verify before selecting versions |
-| [Contributor instructions](AGENTS.md) | Standalone coding and agent rules |
-| [Phase status](phases/STATUS.md) | Implementation progress and acceptance evidence |
+```sh
+mkdir vcli-tool
+cd vcli-tool
+npm install --no-audit --no-fund ../vcli-cli-0.1.2.tgz
+cd ..
+./vcli-tool/node_modules/.bin/vcli init my-api --yes --skip-install
+cd my-api
+make install
+npm exec -- vcli check
+npm run build
+npm start
+```
 
-## Delivery phases
+Open `http://127.0.0.1:3100/health/ready` once Nest starts. The minimal app needs no database or provider configuration. Commit the generated project, including `tools/vcli/`, the selected auth package if present, `package-lock.json`, and `vcli.lock.json`. On the next Git checkout, `make install` bootstraps the same pinned CLI and records installation.
 
-Each phase contains `README.md` for design and scope, `TASKS.md` for ordered work, and `ACCEPTANCE.md` for the evidence required to finish. Start with the [phase workflow](phases/README.md).
+To build the generator from source, clone this repository and run `npm ci --ignore-scripts --no-audit --no-fund` and `npm run build`. Invoke the resulting `node path/to/vcli/bin/vcli.mjs` from the parent directory where you want the new app created.
 
-| Phase | Deliverable |
-| --- | --- |
-| [00 — Design baseline](phases/00-design-baseline/README.md) | Resolve the baseline, conventions, support boundaries, and feasibility questions |
-| [01 — Project foundation](phases/01-project-foundation/README.md) | Minimal NestJS app with configuration, logs, health, README, and agent rules |
-| [02 — Safe generation](phases/02-safe-generation/README.md) | Add capabilities and generate feature code without overwriting custom work |
-| [03 — Authentication and databases](phases/03-authentication-databases/README.md) | Firebase/local JWT auth, multi-device sessions, MongoDB/PostgreSQL |
-| [04 — Realtime](phases/04-realtime/README.md) | Socket.IO, Centrifugo service integration, native WebSocket |
-| [05 — Email and push](phases/05-email-push/README.md) | SMTP, Firebase action-email choices, FCM, purpose-specific APNs |
-| [06 — Storage and media](phases/06-storage-media/README.md) | Local files, AWS S3, one verified S3-compatible provider |
-| [07 — Diagnostics and AI](phases/07-diagnostics-ai/README.md) | Vector, Logdy, retained evidence, scoped read-only MCP |
-| [08 — Deployment](phases/08-deployment/README.md) | Platform-specific deployment for Dokploy, Coolify, CapRover |
-| [09 — Upgrades and extensibility](phases/09-upgrades-extensibility/README.md) | Safe maintenance, security updates, proven extension workflow |
+## Start with a database and authentication
 
-The first useful milestone is Phases 01–02: create a working project, customize it, add a capability, and verify that custom work survives. The wider product remains in scope behind explicit acceptance gates.
+This example selects PostgreSQL, local username/password authentication, and a working notes feature. Run it from the parent directory where the new project should live.
 
-## Design direction
+```sh
+./vcli-tool/node_modules/.bin/vcli init notes-api --yes --skip-install \
+  --database postgres --auth local --local-identifier username --notes
+cd notes-api
+make install
+```
 
-- Small contracts at actual provider boundaries; no speculative layer for every function.
-- Normal NestJS build/start and developer-owned application code.
-- Tool-owned registration/configuration files make later additions predictable.
-- A project JSON file records choices; a separate lock records what was generated.
-- One provider per exclusive family; multiple providers where a real use case needs them, such as ordinary and VoIP push.
-- Trusted libraries and a narrow shared authentication package for security mechanics; visible application policy and persistence mapping.
-- Honest evidence: generated, locally tested, provider-tested, and deployed are different states.
+Use `--database mongodb` for the MongoDB variant. VCLI fixes the database choice at init and emits its schema, driver, and native `BaseRepository` in the app. The vendored CLI carries templates for the full catalog. Username authentication has no email recovery flow. If you want email verification and password reset with real delivery, select local email authentication with `--mail smtp` or `--mail http` for Resend at init. The unattended `api` preset defaults to development capture, which production rejects.
 
-Revision 0.2, prepared 16 November 2026. The [original proposal](docs/archive/original-proposal-2026-11-14.md) is preserved for history. Active documents supersede its roadmap and conflicting recommendations. Source provenance and dependency versions still need Phase 00 verification.
+Use the generated README to start the selected database and fill the required values in a private, owner-only config file. With that database running, use the same file for config validation, schema release, and development.
+
+```sh
+npm exec -- vcli config check --config-file .env.development
+npm run build
+npm exec -- vcli release apply --config-file .env.development
+npm exec -- vcli dev --config-file .env.development
+```
+
+For selected auth profiles, visit `/docs` for the API schema. See the [generated MongoDB example](examples/test_notes_mongo/README.md) for a project with notes, private media, and diagnostics.
+
+## Work on an existing project
+
+Run these from the app root.
+
+| Task                                                                   | Command                                             |
+| ---------------------------------------------------------------------- | --------------------------------------------------- |
+| See selected capabilities, install state, and the last recorded checks | `npm exec -- vcli inspect --json`                   |
+| Check how a file was generated and who owns it                         | `npm exec -- vcli explain src/app.custom.module.ts` |
+| Browse the available capabilities                                      | `npm exec -- vcli catalog --verbose`                |
+| Preview a capability addition                                          | `npm exec -- vcli add storage.local --dry-run`      |
+| Preview a new feature                                                  | `npm exec -- vcli g feature invoices --dry-run`     |
+| Run architecture, database isolation, lint, and TypeScript checks      | `npm exec -- vcli check`                            |
+
+Review a preview, then rerun the command without `--dry-run` when ready. Register a new feature in `src/app.custom.module.ts` and explicitly pass the configured modules it consumes. Keep HTTP validation in controllers and business rules, authorization, and persistence in the owning feature. For a new table or index, register a versioned change in `src/release/custom-migrations.ts`. Release application and startup readiness use the same schema manifest. [Architecture](docs/ARCHITECTURE.md) · [Migration guide](docs/CLI-RELEASE.md)
+
+`vcli.json` records the desired stack. `vcli.lock.json` records realized choices, ownership, and source, installation, and check outcomes. VCLI updates managed files and preserves edited business scaffolds and your application version. Use the target release CLI to preview upgrades before applying them. [Upgrade guide](docs/CLI-MAINTENANCE.md)
+
+## Keep AI context with the code
+
+Generated apps include `AGENTS.md` for Codex and Grok Build. Claude Code imports the same file through `CLAUDE.md`. The guide describes the selected stack, where to make changes, how to use the CLI, and which checks to run.
+
+Write durable project rules below the managed block in `AGENTS.md`. Include decisions such as who can cancel an invoice, which feature owns a field, and which test proves the behavior. VCLI refreshes its own guidance as capabilities change and preserves your project rules. Keep provider-specific instructions with the feature that needs them.
+
+## Capabilities and verification
+
+| Area                  | Available choices                                                                                                                              |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database and identity | PostgreSQL with Drizzle or MongoDB with Mongoose. Local email/password, local username/password, and Firebase identity.                        |
+| Realtime              | Socket.IO, native WebSocket, or Centrifugo, with documented scale profiles.                                                                    |
+| Email and push        | Development capture, SMTP, or Resend. Purpose-specific FCM and APNs integrations.                                                              |
+| Storage               | Private local storage, AWS S3, or Cloudflare R2, with upload modes supported by the selected provider.                                         |
+| Operations            | Local services, schema releases, backups, retained diagnostics and optional read-only MCP. Dokploy, Coolify, and CapRover deployment profiles. |
+
+Use `catalog` for prerequisites and supported combinations. The `0.1.2` verification covers a fresh Git clone, upgrades from an existing project, custom schema releases, and notes ownership on both native databases. Hosted-provider, device, and live-deployment acceptance remain pending. [Recipe catalog](docs/CLI-RECIPES.md) · [Verification](docs/CLI-VERIFICATION.md) · [Phase status](phases/STATUS.md)
+
+For work on VCLI itself, start with [contributor instructions](AGENTS.md), the [source map](START-HERE.md), and the [architecture](docs/ARCHITECTURE.md). The [hand-built reference apps](examples/README.md) document the expected NestJS layout and their own verification.

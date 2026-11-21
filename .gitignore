@@ -6,11 +6,20 @@
 .vcli/local/
 
 # Dependency/build/test output when implementation begins
-node_modules/
-dist/
+node_modules
+/dist/
+/packages/auth-runtime/dist/
 coverage/
 *.log
 
 # Local editor/OS files
 .DS_Store
 Thumbs.db
+
+.vcli/
+
+var/
+
+*.tgz
+
+/runtime-packages/
