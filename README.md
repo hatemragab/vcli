@@ -6,34 +6,34 @@ The generated project is ordinary NestJS. It uses flat feature modules, strict T
 
 ## Quick start
 
-Use Node 26.13.1 or newer within Node 26, npm 11.20.0, and Make. Download `vcli-cli-0.1.2.tgz` from the [private GitHub release](https://github.com/hatemragab/vcli/releases/tag/v0.1.2). From a parent directory where you keep projects, install the tarball and create a minimal API.
+Use Node 26.13.1 or newer within Node 26 and npm 11.20.0. From the parent directory where you keep projects, run this to download VCLI, create `my-api`, and install its dependencies.
 
 ```sh
-mkdir vcli-tool
-cd vcli-tool
-npm install --no-audit --no-fund ../vcli-cli-0.1.2.tgz
-cd ..
-./vcli-tool/node_modules/.bin/vcli init my-api --yes --skip-install
+npm exec --yes \
+  --package=https://github.com/hatemragab/vcli/releases/download/v0.1.2/vcli-cli-0.1.2.tgz \
+  -- vcli init my-api --yes
 cd my-api
-make install
-npm exec -- vcli check
-npm run build
-npm start
+npm run build && npm start
 ```
 
-Open `http://127.0.0.1:3100/health/ready` once Nest starts. The minimal app needs no database or provider configuration. Commit the generated project, including `tools/vcli/`, the selected auth package if present, `package-lock.json`, and `vcli.lock.json`. On the next Git checkout, `make install` bootstraps the same pinned CLI and records installation.
+Open [the readiness endpoint](http://127.0.0.1:3100/health/ready) once Nest starts. The minimal app needs no database or provider configuration. Run `npm exec -- vcli check` from the app root to verify it with the pinned project CLI.
 
-To build the generator from source, clone this repository and run `npm ci --ignore-scripts --no-audit --no-fund` and `npm run build`. Invoke the resulting `node path/to/vcli/bin/vcli.mjs` from the parent directory where you want the new app created.
+Commit the generated project, including `tools/vcli/`, the selected auth package if present, `package-lock.json`, and `vcli.lock.json`. On a fresh checkout, `make install` bootstraps the same pinned CLI and records installation.
+
+[Download the tarball](https://github.com/hatemragab/vcli/releases/download/v0.1.2/vcli-cli-0.1.2.tgz) · [SHA-256 checksum](https://github.com/hatemragab/vcli/releases/download/v0.1.2/vcli-cli-0.1.2.tgz.sha256) · [Release notes](https://github.com/hatemragab/vcli/releases/tag/v0.1.2)
+
+To build the generator from source, run `git clone https://github.com/hatemragab/vcli.git`, then run `npm ci --ignore-scripts --no-audit --no-fund` and `npm run build` in the checkout. Invoke `node path/to/vcli/bin/vcli.mjs` from the parent directory where you want the new app created.
 
 ## Start with a database and authentication
 
 This example selects PostgreSQL, local username/password authentication, and a working notes feature. Run it from the parent directory where the new project should live.
 
 ```sh
-./vcli-tool/node_modules/.bin/vcli init notes-api --yes --skip-install \
+npm exec --yes \
+  --package=https://github.com/hatemragab/vcli/releases/download/v0.1.2/vcli-cli-0.1.2.tgz \
+  -- vcli init notes-api --yes \
   --database postgres --auth local --local-identifier username --notes
 cd notes-api
-make install
 ```
 
 Use `--database mongodb` for the MongoDB variant. VCLI fixes the database choice at init and emits its schema, driver, and native `BaseRepository` in the app. The vendored CLI carries templates for the full catalog. Username authentication has no email recovery flow. If you want email verification and password reset with real delivery, select local email authentication with `--mail smtp` or `--mail http` for Resend at init. The unattended `api` preset defaults to development capture, which production rejects.
