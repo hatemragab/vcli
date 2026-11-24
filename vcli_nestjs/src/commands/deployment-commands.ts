@@ -52,6 +52,7 @@ function resources(
     'apns',
     'centrifugo',
     'redis',
+    'auth-redis',
     'diagnostic-reader',
   ];
   const result: Partial<Record<ResourceId, string>> = {};

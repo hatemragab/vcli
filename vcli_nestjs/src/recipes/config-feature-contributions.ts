@@ -1,4 +1,7 @@
-import type { ProjectConfig } from '../contracts.js';
+import {
+  LOCAL_DEVELOPMENT_STORAGE_ROOT,
+  type ProjectConfig,
+} from '../contracts.js';
 import type { ConfigDraft } from './config-core-contributions.js';
 import { evidenceByteBounds } from './evidence-bounds.js';
 import { selection } from './selection.js';
@@ -9,10 +12,15 @@ export function contributeStorage(
   storage: string | undefined,
 ): void {
   if (storage) {
+    const localRoot =
+      storage === 'storage.local'
+        ? LOCAL_DEVELOPMENT_STORAGE_ROOT
+        : 'var/storage';
     draft.fields.push({
       key: 'LOCAL_STORAGE_ROOT',
       schema: "z.string().min(1).default('var/storage')",
-      example: 'var/storage',
+      example: localRoot,
+      production: 'var/storage',
     });
     if (selection(config, 'media'))
       draft.fields.push(
@@ -78,13 +86,16 @@ export function contributeRealtime(
         schema: 'number(16384,65536)',
         example: '16384',
       },
-      {
+    );
+    let details = '';
+    if (realtime !== 'realtime.socket-io') {
+      draft.fields.push({
         key: 'REALTIME_TICKET_TTL_SECONDS',
         schema: 'number(30,30)',
         example: '30',
-      },
-    );
-    let details = '';
+      });
+      details = 'ticketTtlSeconds:e.REALTIME_TICKET_TTL_SECONDS,';
+    }
     if (realtime === 'realtime.centrifugo') {
       draft.fields.push(
         {
@@ -106,11 +117,11 @@ export function contributeRealtime(
       draft.guards.push(
         "if(e.CENTRIFUGO_API_KEY===e.CENTRIFUGO_PROXY_SECRET) throw new ApplicationError('INVALID_CENTRIFUGO_CONFIG',500);",
       );
-      details =
+      details +=
         'centrifugoApiUrl:e.CENTRIFUGO_API_URL,centrifugoApiKey:e.CENTRIFUGO_API_KEY,centrifugoProxySecret:e.CENTRIFUGO_PROXY_SECRET,';
     }
     draft.output.push(
-      `realtime:{scale:'${config.capabilities.realtime?.options.scale === 'cluster' ? 'cluster' : 'single-instance'}' as const,driver:'${realtime === 'realtime.socket-io' ? 'socketio' : realtime === 'realtime.native-ws' ? 'ws' : 'centrifugo'}' as const,path:e.REALTIME_PATH,maxPayloadBytes:e.REALTIME_MAX_PAYLOAD_BYTES,ticketTtlSeconds:e.REALTIME_TICKET_TTL_SECONDS,${details}}`,
+      `realtime:{scale:'${config.capabilities.realtime?.options.scale === 'cluster' ? 'cluster' : 'single-instance'}' as const,driver:'${realtime === 'realtime.socket-io' ? 'socketio' : realtime === 'realtime.native-ws' ? 'ws' : 'centrifugo'}' as const,path:e.REALTIME_PATH,maxPayloadBytes:e.REALTIME_MAX_PAYLOAD_BYTES,${details}}`,
     );
   }
 }

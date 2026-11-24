@@ -7,7 +7,7 @@ export type Installation = Readonly<{
   platform: 'android' | 'ios' | 'web' | 'other';
   createdAt: number;
 }>;
-export const installationTable = pgTable('ref_installations', {
+export const installationTable = pgTable('installations', {
   id: uuid('id').primaryKey(),
   accountId: uuid('account_id').notNull(),
   generation: integer('generation').notNull(),

@@ -79,6 +79,7 @@ test(
         };
         dev: {
           ready: boolean;
+          redisAuthLogin: boolean;
           sentinelSurvived: boolean;
           portReleased: boolean;
         };
@@ -94,11 +95,13 @@ test(
       'download-estimate',
       'production-image-build',
       'production-image-audit',
+      'image-redis-shared-fixture',
       'image-explicit-release',
       'image-native-argon-seed',
       'image-health-jose-native-notes-restart',
       'services-real-isolation-preservation',
       'actual-dev-owned-shutdown-and-json-refusal',
+      'redis-rate-fixture-cleanup',
     ])
       assert.ok(
         report.records.some(
@@ -112,6 +115,7 @@ test(
     assert.equal(report.facts.imageAudit.devCliAbsent, true);
     assert.equal(report.facts.imageRestart.nativeRowsPreserved, true);
     assert.equal(report.facts.dev.ready, true);
+    assert.equal(report.facts.dev.redisAuthLogin, true);
     assert.equal(report.facts.dev.sentinelSurvived, true);
     assert.equal(report.facts.dev.portReleased, true);
   },

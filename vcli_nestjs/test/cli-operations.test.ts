@@ -489,24 +489,81 @@ test('actual JSON dev refuses before runtime; source-only actual dev/release do 
   );
 });
 
+test('dev reports missing configuration before launching a watcher or taking ownership', async (t) => {
+  const root = await fixture(t, { installed: true });
+  await rm(path.join(root, '.env.development'), { force: true });
+  const outcome = await invoke(
+    root,
+    ['dev'],
+    {
+      ...noExecution,
+      environment: () => ({ PRIVATE_SENTINEL: 'fixture-only' }),
+    },
+    false,
+  );
+  const error = outcome.result.errors?.[0];
+  assert.equal(error?.code, 'DEV_CONFIG_REQUIRED');
+  assert.match(error.action, /DATABASE_URL.*--config-file/);
+  assert.equal(error.action.includes('fixture-only'), false);
+  await assert.rejects(
+    stat(path.join(root, '.vcli/local/dev-development.lock')),
+    { code: 'ENOENT' },
+  );
+});
+
+test('dev uses the private development config by default', async (t) => {
+  const root = await fixture(t, { installed: true });
+  const configFile = path.join(root, '.env.development');
+  await writeFile(configFile, 'NODE_ENV=development\n', { mode: 0o600 });
+  let called = false;
+  const result = await invoke(
+    root,
+    ['dev', '--port', String(await freePort())],
+    {
+      ...noExecution,
+      environment: () => ({}),
+      devRunner: async ({ environment }) => {
+        called = true;
+        assert.equal(environment.APP_ENV_FILE, configFile);
+        return { code: 0, stdout: '' };
+      },
+    },
+    false,
+  );
+  assert.equal(called, true);
+  assert.equal(result.code, 0);
+});
+
 test('human dev delegates local Nest with explicit test environment and propagates actual exit code', async (t) => {
   const root = await fixture(t, { installed: true }),
     selectedPort = await freePort();
   let called = 0;
+  const environment = () => ({
+    NODE_ENV: 'development',
+    DATABASE_URL: 'postgres://127.0.0.1/fixture',
+    PRIVATE_SENTINEL: 'PRIVATE_SENTINEL',
+  });
+  const args = ['dev', '--environment', 'test', '--port', String(selectedPort)];
   const outcome = await invoke(
     root,
-    ['dev', '--environment', 'test', '--port', String(selectedPort)],
+    args,
     {
-      environment: () => ({
-        NODE_ENV: 'development',
-        PRIVATE_SENTINEL: 'PRIVATE_SENTINEL',
-      }),
+      environment,
       devRunner: async (invocation) => {
         called++;
         assert.equal(invocation.command, process.execPath);
         assert.equal(invocation.environment.NODE_ENV, 'test');
         assert.equal(invocation.environment.PORT, String(selectedPort));
         assert.deepEqual(invocation.args.slice(1), ['start', '--watch']);
+        const duplicate = await invoke(
+          root,
+          args,
+          { ...noExecution, environment },
+          false,
+        );
+        const error = duplicate.result.errors?.[0];
+        assert.equal(error?.code, 'LOCAL_OPERATION_OWNERSHIP_CONFLICT');
+        assert.match(error.action, /Stop it in the IDE or terminal/);
         return { code: 130, signal: 'SIGINT', stdout: 'PRIVATE_SENTINEL' };
       },
     },

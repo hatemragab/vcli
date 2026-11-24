@@ -8,7 +8,7 @@ import type {
 import { checkSchema } from './data.js';
 import { EngineError } from './engine-error.js';
 import { listJournals, unfinishedJournals } from './operation-storage.js';
-import { relativePath } from './paths.js';
+import { hasFileAncestor, relativePath } from './paths.js';
 import { renderError } from './plan-assembly.js';
 import { resolveRecipes } from './resolve-recipes.js';
 import type { ProjectLock } from './types.js';
@@ -43,7 +43,9 @@ export function validateFiles(files: RenderedFile[]): void {
       paths.has(file.path) ||
       typeof file.content !== 'string' ||
       Buffer.byteLength(file.content) > 16_000_000 ||
-      !['managed', 'scaffold'].includes(file.ownership)
+      !['managed', 'scaffold'].includes(file.ownership) ||
+      (file.preserveExisting !== undefined &&
+        (file.ownership !== 'scaffold' || file.preserveExisting !== true))
     )
       throw new EngineError(
         'INVALID_CATALOG',
@@ -52,15 +54,12 @@ export function validateFiles(files: RenderedFile[]): void {
       );
     paths.add(file.path);
   }
-  for (const file of paths)
-    if (
-      [...paths].some((other) => other !== file && other.startsWith(`${file}/`))
-    )
-      throw new EngineError(
-        'INVALID_CATALOG',
-        'planning',
-        'A generated file cannot also be a directory ancestor.',
-      );
+  if (hasFileAncestor(paths))
+    throw new EngineError(
+      'INVALID_CATALOG',
+      'planning',
+      'A generated file cannot also be a directory ancestor.',
+    );
 }
 
 export async function renderCatalog(

@@ -19,10 +19,9 @@ src/
   recipes/               # core and implemented capability recipes
   generators/            # feature/code scaffolds
 templates/               # ordinary source/config/doc templates
-tests/                   # engine fixtures and generated-app acceptance
-examples/                # small reproducible generated fixtures
+test/                    # engine fixtures and generated-app acceptance
+var/                     # ignored local output and evidence
 docs/                    # maintained contracts and decisions
-phases/                  # implementation plan/status
 ```
 
 ## Generated application ownership
@@ -55,11 +54,17 @@ Each feature owns its schema and persistence. Other features import deliberately
 
 A feature scaffold must not invent business policy, permissive authorization or fake successful methods. Input, output, actor and persistence rules are explicit. Configuration validation, transaction coordination, pagination, authentication and safe errors are shared mechanisms; provider-specific behavior stays in focused implementation services.
 
-### Nest registration is not provider visibility
+### Development and test fixtures
 
-`app.module.ts` imports the generated integration module once and preserves the custom integration seam. VCLI can regenerate its own registration module while developers customize the rest.
+Database-backed apps generate a one-shot seed runner. The generated registry selects built-in seeders from the recipe choices, and `src/seed/custom-seeders.ts` is the developer-owned registration point. A seed file lives beside its owning feature's service and implements fixture validation, idempotent writes, and per-module counts. The runner validates the selected environment, opens the selected database, checks the schema before invoking the seeders, and closes the connection after the operation. Seed runs are explicit development/test actions. Permanent application-required data belongs in versioned migrations.
 
-Importing two modules at the root does **not** make one module's providers available inside the other. Capability modules export explicit providers; new consumer templates import those modules explicitly. For an existing developer-owned consumer, generate integration instructions or a bounded explicitly planned edit through its documented seam. Report manual integration as pending. Do not mask missing dependency injection with global modules or arbitrary AST rewrites.
+### Nest module imports and provider visibility
+
+`app.module.ts` imports `VcliAppModule` and `AppCustomModule` using static Nest module declarations. `VcliAppModule` imports the modules selected by VCLI. Developers add feature modules to `AppCustomModule`.
+
+A module can inject a capability's exported providers when it imports that capability module directly. VCLI emits these imports in new feature scaffolds when a consumer declares `--use`. Developers control the imports in their own modules.
+
+`createApp()` prepares the selected runtime instances and supplies them to Nest providers during startup. Each startup has its own bindings. The bootstrap still owns schema checks, failed-start cleanup and shutdown.
 
 ## Recipe contract
 
@@ -137,13 +142,15 @@ Conditional updates handle single-record invariants. Operations spanning records
 
 Keep provider/network calls outside retryable database transactions. Commit durable effect intent before dispatch where the workflow requires reliable asynchronous effects; authorization reads, verification and preparation may precede the accepting database commit. Use a purpose-specific outbox/idempotent dispatch process only where required, not queues universally. A timeout after possible acceptance is an unknown outcome, not proof of failure. Business operation identity, bounded retries, and provider idempotency are explicit. Exactly-once delivery is not assumed.
 
-Identity, account, session, installation, connection, and push destination have different lifecycles. Firebase proof is not a physical device credential. Local access JWTs do not independently establish current session authority. Phase 03 defines revocation/refresh transitions; Phase 04 consumes them, and Phase 05 fences notification ownership.
+Basic local auth issues short-lived JWT access tokens for an account in the selected database. Full local auth and Firebase also track identities, installations, and sessions with distinct lifecycles. The full authority checks the current session and installation before protected work. Realtime and push consume those durable authority facts for admission and delivery. [Identity contract](CLI-IDENTITY.md)
 
 ## Environment and services
 
-Generate `.env.development.example` and `.env.production.example` with safe placeholders, conditional required fields and instructions. Private `.env.development`/`.env.production` files are ignored, never populated from another project, and preserved during later additions. Explicit runtime environment takes precedence over a deliberately selected private file, then documented safe defaults. Production may use injected secrets entirely; it must never quietly load development credentials or capture adapters.
+New projects receive a gitignored, mode `0600` `.env.development` with selected local defaults and a fresh random JWT signing key when local authentication is selected. Keep existing private files when adding capabilities or upgrading. Explicit runtime environment takes precedence over a deliberately selected private file and documented runtime defaults. For production, supply private settings through the deployment environment or an explicitly selected production file. Production rejects development/test-named config files and capture adapters.
 
-Build one conditional configuration model for validation, examples, documentation and deployment mapping. Existing private files are not regenerated. Additions report newly needed keys without exposing values. Credential JSON, JWT keys, tokens, action links and signed URLs stay out of logs, images, plans and example files.
+Build one conditional configuration model for validation, development defaults, documentation and deployment mapping. Additions report newly needed keys without exposing values. Credential JSON, JWT keys, tokens, action links and signed URLs stay out of logs, images and portable plans.
+
+For selected auth, Redis stores expiring rate-limit counters shared across instances. The selected native database owns accounts and the lifecycle records used by full local auth and Firebase. Production requires `REDIS_URL` supplied through private runtime configuration. Native development can use a Redis process reachable at `redis://127.0.0.1:6379`.
 
 Recipes contribute a small service description: image/version, command, ports, health, resource needs, secrets, persistence, ingress and release requirements. Dev wrappers delegate to supported service tooling and Nest scripts. Deploy renderers translate this into platform-specific artifacts and reject unsupported profiles. Operators are separately authenticated and invoked. No VCLI supervisor or continuous reconciler is required.
 

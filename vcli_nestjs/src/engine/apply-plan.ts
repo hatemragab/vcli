@@ -1,7 +1,12 @@
 import { constants } from 'node:fs';
 import { chmod, mkdir, open, rename, rm, unlink } from 'node:fs/promises';
 import path from 'node:path';
+import { LOCAL_DEVELOPMENT_STORAGE_ROOT } from '../contracts.js';
 import { canonical, hash, validateToolchain } from './data.js';
+import {
+  developmentEnvFile,
+  initializeDevelopmentEnvironment,
+} from './development-environment.js';
 import { correlateFailure, EngineError } from './engine-error.js';
 import { installationHealthy } from './inspection.js';
 import {
@@ -123,6 +128,28 @@ async function verifyPlan(plan: GenerationPlan): Promise<void> {
       change.expected,
     );
 }
+async function createDirectory(
+  full: string,
+  relative: string,
+  journal: OperationJournal,
+  mode: number,
+): Promise<void> {
+  try {
+    await mkdir(full, { mode });
+  } catch (error) {
+    if (isErrno(error, 'EEXIST'))
+      throw new EngineError(
+        'STALE_PLAN',
+        'apply',
+        'A project directory appeared during apply; recover and replan.',
+      );
+    throw error;
+  }
+  // Record only a directory this operation actually created.
+  journal.createdDirectories.push(relative);
+  await writeJournal(journal);
+}
+
 async function sourceDirectory(
   projectDir: string,
   relative: string,
@@ -134,23 +161,8 @@ async function sourceDirectory(
   for (const part of directory.split('/')) {
     cursor = cursor ? `${cursor}/${part}` : part;
     const full = await projectPath(projectDir, cursor);
-    if (!(await statOrNull(full))) {
-      try {
-        await mkdir(full, { mode: 0o755 });
-      } catch (error) {
-        if (isErrno(error, 'EEXIST'))
-          throw new EngineError(
-            'STALE_PLAN',
-            'apply',
-            'A source directory appeared during apply; recover and replan.',
-          );
-        throw error;
-      }
-      // Never claim a concurrently created directory. A crash before this record can
-      // leave an empty task directory, which is safer than deleting an unowned one.
-      journal.createdDirectories.push(cursor);
-      await writeJournal(journal);
-    }
+    if (!(await statOrNull(full)))
+      await createDirectory(full, cursor, journal, 0o755);
   }
 }
 export async function applyPlan(
@@ -283,6 +295,20 @@ export async function applyPlan(
         journal.entries[index]!.status = 'written';
         written += 1;
       }
+      if (plan.kind === 'init' && plan.developmentDefaults) {
+        await initializeDevelopmentEnvironment(plan, journal, staging);
+        if (
+          plan.config.capabilities.storage?.recipe === 'storage.local' &&
+          plan.developmentDefaults.LOCAL_STORAGE_ROOT ===
+            LOCAL_DEVELOPMENT_STORAGE_ROOT
+        )
+          await createDirectory(
+            await projectPath(plan.projectDir, LOCAL_DEVELOPMENT_STORAGE_ROOT),
+            LOCAL_DEVELOPMENT_STORAGE_ROOT,
+            journal,
+            0o700,
+          );
+      }
       const state = await readProject(plan.projectDir);
       journal.outcomes = { ...state.lock.outcomes };
       journal.status = 'source-completed';
@@ -300,7 +326,10 @@ export async function applyPlan(
       }
       return {
         operationId: plan.id,
-        changed: plan.changes.map((change) => change.path),
+        changed: [
+          ...plan.changes.map((change) => change.path),
+          ...(journal.developmentEnvironment ? [developmentEnvFile] : []),
+        ],
         outcomes,
         pending: [...plan.pending],
       };

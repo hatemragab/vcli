@@ -13,6 +13,7 @@ export const serviceImages = Object.freeze({
   node: 'node:26.13.1-bookworm-slim',
   mongodb: 'mongo:8.0.38',
   postgres: 'postgres:16.16-bookworm',
+  redis: 'redis:7.4.7-alpine',
 });
 
 export interface ServicePlanContext {
@@ -241,6 +242,40 @@ export function contributeProviderExternalsAndJobs(
   ctx: ServicePlanContext,
 ): void {
   const { config } = ctx;
+  if (selection(config, 'auth')) {
+    addExternalRequirement(
+      ctx,
+      'auth-redis',
+      ['REDIS_URL'],
+      ctx.isProduction
+        ? 'Configure REDIS_URL privately for reachable Redis shared by the API replicas. This resource holds only expiring authentication rate-limit counters.'
+        : 'Run Redis separately. The local REDIS_URL defaults to redis://127.0.0.1:6379 and can be overridden in private configuration.',
+    );
+    ctx.services.push({
+      id: 'auth-redis',
+      kind: 'redis',
+      execution: 'external',
+      resourceRef:
+        ctx.options.externalResources?.['auth-redis'] ?? ctx.ref('auth-redis'),
+      command: [],
+      ports: [
+        {
+          port: 6379,
+          visibility: ctx.isProduction ? 'private' : 'loopback',
+          purpose: 'Authentication rate-limit counters',
+        },
+      ],
+      dependsOn: [],
+      environment: ctx.env.filter((field) => field.key === 'REDIS_URL'),
+      resources: { memoryMiB: 128, cpus: 0.5, pids: 64 },
+      health: {
+        scope: 'external',
+        check: 'Verify Redis connectivity and rate-limit behavior from the API',
+        applicationAcceptance: false,
+      },
+      volumes: [],
+    });
+  }
   if (selection(config, 'auth') === 'auth.firebase') {
     addExternalRequirement(
       ctx,

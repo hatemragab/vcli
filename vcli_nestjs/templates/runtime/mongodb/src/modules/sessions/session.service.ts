@@ -31,6 +31,23 @@ export class SessionService extends BaseRepository<Session> {
       .lean<Session[]>()
       .exec();
   }
+  hasInstallationRevocation(
+    accountId: string,
+    installationId: string,
+    installationGeneration: number,
+    authenticatedAt: number,
+    context: TransactionContext,
+  ): Promise<boolean> {
+    return this.exists(
+      {
+        accountId,
+        installationId,
+        installationGeneration,
+        revokedAt: { $gte: authenticatedAt },
+      },
+      { context },
+    );
+  }
   async revoke(
     accountId: string,
     ids: readonly string[],

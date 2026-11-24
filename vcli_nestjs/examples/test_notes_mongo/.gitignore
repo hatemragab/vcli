@@ -1,8 +1,0 @@
-node_modules/
-/dist/
-var/
-.env
-.env.*
-!.env.*.example
-.vcli/
-*.tgz

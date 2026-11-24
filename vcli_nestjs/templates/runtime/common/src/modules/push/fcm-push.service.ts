@@ -1,4 +1,5 @@
 import { getMessaging, type Messaging } from 'firebase-admin/messaging';
+import { z } from 'zod';
 import { pushRetryAfter } from './push-retry-after.js';
 import type { App } from 'firebase-admin/app';
 import type { PushSender } from './push.entity.js';
@@ -7,6 +8,32 @@ import type {
   PushMessage,
   PushOutcome,
 } from './push.entity.js';
+
+const unregisteredDetail = z.object({
+  '@type': z.literal('type.googleapis.com/google.firebase.fcm.v1.FcmError'),
+  errorCode: z.literal('UNREGISTERED'),
+});
+const fcmErrorBody = z.object({
+  error: z.object({ details: z.array(z.unknown()) }),
+});
+
+function confirmsUnregistered(response: unknown): boolean {
+  if (!response || typeof response !== 'object' || !('data' in response))
+    return false;
+  try {
+    const parsed = fcmErrorBody.safeParse(response.data);
+    return (
+      parsed.success &&
+      parsed.data.error.details.some(
+        (detail) => unregisteredDetail.safeParse(detail).success,
+      )
+    );
+  } catch {
+    // An unreadable response cannot authorize deletion.
+    return false;
+  }
+}
+
 export function translateFcmError(
   error: unknown,
   now = Date.now(),
@@ -31,15 +58,20 @@ export function translateFcmError(
     now,
   );
   if (
-    [
-      'messaging/registration-token-not-registered',
-      'messaging/invalid-registration-token',
-    ].includes(code)
+    code === 'messaging/invalid-registration-token' ||
+    confirmsUnregistered(response)
   )
     return {
       status: 'rejected',
       code: 'FCM_INVALID_DESTINATION',
       invalidDestination: true,
+    };
+  // The Admin SDK also maps a generic NOT_FOUND to this code.
+  if (code === 'messaging/registration-token-not-registered')
+    return {
+      status: 'rejected',
+      code: 'FCM_DESTINATION_UNCONFIRMED',
+      invalidDestination: false,
     };
   if (
     ['messaging/server-unavailable', 'messaging/internal-error'].includes(code)

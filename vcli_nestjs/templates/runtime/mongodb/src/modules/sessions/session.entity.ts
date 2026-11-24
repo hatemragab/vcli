@@ -28,7 +28,7 @@ export const sessionSchema = new Schema<Session>(
     expiresAt: Number,
     revokedAt: { type: Number, default: null },
   },
-  { ...options, collection: 'ref_sessions' },
+  { ...options, collection: 'sessions' },
 );
 sessionSchema.index(
   { secretHash: 1 },
@@ -44,7 +44,7 @@ export const refreshSchema = new Schema<Refresh>(
     expiresAt: Number,
     consumedAt: { type: Number, default: null },
   },
-  { ...options, collection: 'ref_refresh' },
+  { ...options, collection: 'refresh' },
 );
 sessionSchema.add(new Schema({ _id: String }));
 refreshSchema.add(new Schema({ _id: String }));

@@ -1,9 +1,4 @@
-import { createHash } from 'node:crypto';
-import {
-  projectNameSchema,
-  validationFailure,
-  type ProjectConfig,
-} from '../contracts.js';
+import { validationFailure, type ProjectConfig } from '../contracts.js';
 import type { EnvironmentContribution } from './render-config.js';
 import { selection } from './selection.js';
 import {
@@ -20,8 +15,9 @@ import type {
   ServicePlan,
   ServicePlanOptions,
 } from './service-plan-types.js';
+import { serviceResourceName } from './service-resource-name.js';
 
-export { serviceImages };
+export { serviceImages, serviceResourceName };
 
 /** Artifact contracts reviewed against official docs, not live platform acceptance. */
 export const targetContracts = Object.freeze({
@@ -33,22 +29,6 @@ export const targetContracts = Object.freeze({
 
 const production = (environment: string) =>
   environment === 'staging' || environment === 'production';
-
-/** Retain full project metadata while bounding native resource identifiers to 63 characters. */
-export function serviceResourceName(project: string, suffix: string): string {
-  if (!projectNameSchema.safeParse(project).success)
-    throw new Error('INVALID_SERVICE_PROJECT');
-  if (!/^[a-z][a-z0-9-]*$/.test(suffix))
-    throw new Error('INVALID_SERVICE_RESOURCE_SUFFIX');
-  const original = project + '-' + suffix;
-  const normalized = original.replace(/[._]/g, '-');
-  if (normalized === original && normalized.length <= 63) return normalized;
-  return (
-    normalized.slice(0, 46).replace(/-+$/, '') +
-    '-' +
-    createHash('sha256').update(original).digest('hex').slice(0, 16)
-  );
-}
 
 function normalizedEnvironment(
   config: ProjectConfig,
@@ -219,7 +199,10 @@ export function describeServices(
         purpose: 'HTTP liveness/readiness and selected public API',
       },
     ],
-    dependsOn: selection(config, 'database') ? ['database'] : [],
+    dependsOn: [
+      ...(selection(config, 'database') ? ['database'] : []),
+      ...(selection(config, 'auth') ? ['auth-redis'] : []),
+    ],
     environment: env,
     resources: { memoryMiB: 512, cpus: 1, pids: 256 },
     health: {

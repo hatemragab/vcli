@@ -13,28 +13,28 @@ Implemented source selects Socket.IO, native ws or Centrifugo with scale single-
 
 The official [Mongo adapter](https://socket.io/docs/v4/mongo-adapter/) and [Postgres adapter](https://socket.io/docs/v4/postgres-adapter/) carry inter-server hints. Each receiving API node rechecks its own recipients before delivery. Private events never bypass current authority through an account-room broadcast. Native membership detects a node missing from transient adapter discovery; incomplete acknowledgements report unknown. Maximum16 API nodes. Socket.IO is WebSocket-only with polling/upgrades disabled, matching its client. Polling/sticky-session mode is unsupported.
 
-Centrifugo's [Redis engine](https://centrifugal.dev/docs/server/engines) supplies service fanout; memory engine remains single-instance. No app Redis SDK or custom broker is generated. Shared authority stays in the selected database. Shared filesystem/staging and other feature cluster guarantees remain the enclosing deployment's responsibility.
+Centrifugo's Redis engine supplies service fanout, and its memory engine remains single-instance. The app's separately configured auth rate limiter uses `REDIS_URL`. Socket.IO's cluster fanout uses the selected native database adapter. Shared authority stays in the selected database. Shared filesystem and staging guarantees remain the enclosing deployment's responsibility. [Centrifugo engines](https://centrifugal.dev/docs/server/engines) · [Auth rate limiting](CLI-IDENTITY.md)
 
 ## Composition and source manifest
 
-The factory createRealtimeRuntime(config,authority,events,database) requires a fourth selected native handle, MongoDatabase or PostgresDatabase. Return shape stays module/publisher/attach(server)/close(). Its configured module explicitly exports RealtimeService and the selected protocol service; consumers must import that module. Adapters never end the shared native pool/connection.
+`createRealtimeRuntime(config, authority, events, database)` takes the selected native `MongoDatabase` or `PostgresDatabase`. It returns `{ bindings, publisher, attach, close }` for application bootstrap. `RealtimeModule` exports `RealtimeService` and the selected protocol service. Consumers import `RealtimeModule` in their own module. Adapters never end the shared native pool/connection.
 
-The explicit schema/release command calls initializeRealtime(database):Promise<void> from src/modules/realtime/initialize-realtime.ts. Startup calls only RealtimeStoreService.assertInitialized(). Initializer assumes the selected identity foundation created ref_migrations. It creates vcli_realtime_records and selected indexes, marker realtime-v1 and, only for Socket.IO cluster, the native adapter auxiliary collection/table: Mongo capped4MiB vcli_socket_io_events or PostgreSQL vcli_socket_io_attachments (official cleanup). No opposite-provider schema, SQL asset import or runtime DB selector exists.
+The explicit schema/release command calls initializeRealtime(database):Promise<void> from src/modules/realtime/initialize-realtime.ts. Startup calls only RealtimeStoreService.assertInitialized(). Initializer assumes the selected identity foundation created `migrations`. It creates vcli_realtime_records and selected indexes, marker realtime-v1 and, only for Socket.IO cluster, the native adapter auxiliary collection/table: Mongo capped4MiB vcli_socket_io_events or PostgreSQL vcli_socket_io_attachments (official cleanup). No opposite-provider schema, SQL asset import or runtime DB selector exists.
 
 The realtimeFiles manifest emits:
 
 - Common core/realtime: event-publisher.ts, realtime-store.ts.
-- Common modules/realtime: realtime.service.ts, realtime-ticket.service.ts, realtime-records.ts, protocol-validation.ts.
+- Common modules/realtime: realtime.service.ts, realtime-records.ts, protocol-validation.ts.
 - Selected native modules/realtime: realtime-store.service.ts, initialize-realtime.ts.
 - Socket.IO: socket-io.service.ts; cluster adds socket-io-cluster.service.ts and selected native configure-socket-io-cluster.ts plus initialize-socket-io-cluster.ts.
-- Native ws: native-ws.service.ts.
-- Centrifugo: centrifugo-api.service.ts, centrifugo-connection.service.ts, centrifugo-proxy.controller.ts.
-- Generated configured realtime.module.ts, scaffold realtime.controller.ts and the selected clients/*.mjs.
+- Native ws: realtime-ticket.service.ts and native-ws.service.ts.
+- Centrifugo: realtime-ticket.service.ts, centrifugo-api.service.ts, centrifugo-connection.service.ts, centrifugo-proxy.controller.ts.
+- Generated static realtime.module.ts, scaffold realtime.controller.ts and the selected clients/*.mjs.
 - Centrifugo assets: ops/centrifugo/config.json, compose.yml, README.md and service-requirements.json.
 
 Directly injectable services remain flat. RealtimeTicketService takes authority/ttlSeconds/store; CentrifugoConnectionService takes authority/tickets/store/api/proxySecret; SocketIoService takes config/authority/registry/optionalCluster; NativeWsService takes config/authority/tickets/registry; SocketIoClusterService takes store/configureOfficialAdapter/maxPayloadBytes. The generated adapter closure receives the existing native database.
 
-App env remains REALTIME_PATH, REALTIME_MAX_PAYLOAD_BYTES (max65536), REALTIME_TICKET_TTL_SECONDS (max30), and selected Centrifugo API URL/key/proxy secret. Scale is a generation choice. Only the cluster service env adds CENTRIFUGO_ENGINE_REDIS_ADDRESS. The schema1 service descriptor records image, engine, external Redis requirement, public8000 WebSocket, private9000 API/health, and private backend connect/refresh callbacks. O0 consumes service requirements; rendering never provisions or starts them.
+All realtime profiles use REALTIME_PATH and REALTIME_MAX_PAYLOAD_BYTES (max65536). Native ws and Centrifugo also use REALTIME_TICKET_TTL_SECONDS (default and maximum 30 seconds). Centrifugo adds the API URL, key and proxy secret. Scale is a generation choice. Only the cluster service env adds CENTRIFUGO_ENGINE_REDIS_ADDRESS. The schema1 service descriptor records image, engine, external Redis requirement, public8000 WebSocket, private9000 API/health, and private backend connect/refresh callbacks. O0 consumes service requirements; rendering never provisions or starts them.
 
 ## Authority, bounds and outcomes
 

@@ -29,6 +29,8 @@ export class LocalStorageService {
     let bytes = 0;
     let created = false;
     try {
+      signal.throwIfAborted();
+      if ('root' in record.profile) await filesystem.initialize();
       const handle = await filesystem.create(storageId(record));
       created = true;
       try {

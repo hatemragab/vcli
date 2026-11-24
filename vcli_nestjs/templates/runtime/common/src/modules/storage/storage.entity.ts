@@ -1,3 +1,6 @@
+import { join } from 'node:path';
+import { ApplicationError } from '../../core/errors/application-error.js';
+
 export type StorageProfile =
   | Readonly<{
       version: 1;
@@ -74,6 +77,14 @@ export const readyKey = (
 export const stagingKey = (
   record: Pick<StorageObject, 'id' | 'attemptId'>,
 ): string => `staging/${record.id}/${storageId(record)}`;
+export function ownerStorageRoot(root: string, ownerId: string): string {
+  if (
+    !/^[a-z0-9][a-z0-9_-]{0,127}$/i.test(ownerId) ||
+    /^(?:incoming|objects)$/i.test(ownerId)
+  )
+    throw new ApplicationError('UNSAFE_STORAGE_PATH', 400);
+  return join(root, ownerId);
+}
 export const STORAGE_LIMITS = Object.freeze({
   processTransfers: 4,
   transferMs: 30000,

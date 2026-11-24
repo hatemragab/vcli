@@ -1,6 +1,6 @@
-# Start work in the VCLI repository
+# Start work on VCLI NestJS
 
-The CLI source under `src/` is the current implementation. Planning documents, phase task lists and files under `docs/archive/` and `docs/agent-prompts/` are historical or local review context. Ignored evidence under `var/` is local and is not a phase result. Hosted provider, device and deployment acceptance remain pending. Do not start new work at Phase 00.
+The CLI source under `src/` is the current implementation. The phase plans and old reference applications are available in Git history. Files under `docs/archive/` and `docs/agent-prompts/` provide historical or review context. See the current CLI verification guide for recorded acceptance and remaining external checks.
 
 ## Task to file to check
 
@@ -9,7 +9,13 @@ The CLI source under `src/` is the current implementation. Planning documents, p
 | Change an init choice or default | `src/commands/generation-workflows.ts`, `src/commands/selection-options.ts`, `src/recipes/catalog.ts` | `node --test test/cli.test.ts` after `npm run build` |
 | Diagnose a write, drift or recovery | `src/engine/planning.ts`, `src/engine/apply-plan.ts`, `src/engine/recovery.ts` | `node --test test/engine.test.ts` |
 | Change generated username auth | `src/recipes/render-identity.ts`, `templates/runtime/common/src/modules/identity/username-credentials.service.ts` | `node --test test/username-rendering.test.ts` |
+| Change auth rate limiting | `src/recipes/render-identity.ts`, `templates/runtime/common/src/modules/identity/redis-identity-rate-store.ts` | Run `test/auth-lifecycle-native.test.ts` with `VCLI_IDENTITY_REDIS_TEST_URL` set to a disposable Redis, then verify a generated app's rate-limited HTTP routes |
+| Change private development configuration | `src/recipes/render-config.ts`, `src/engine/development-environment.ts` | Verify fresh init writes a gitignored mode `0600` file and later commands preserve it |
+| Change Firebase project setup | `src/commands/firebase-commands.ts`, `src/commands/firebase-setup-environment.ts`, `src/commands/firebase-cli.ts` | `node --test test/firebase-setup-cli.test.ts` after `npm run build` |
+| Change optional Redis Compose | `src/commands/generation-commands.ts`, `src/recipes/render-services.ts`, `src/recipes/service-plan-contributions.ts` | Compare generated service artifacts with and without `init --redis-docker` |
 | Follow a note request | generated `src/modules/notes/notes.controller.ts`, service, entity | `node --test test/notes-example-runtime.test.ts` |
+| Change database seeding or its scaffold | `src/recipes/render-seed.ts`, `src/recipes/render-scaffold.ts`, generated `src/modules/notes/notes.seed.ts` | Run `make seed` and `npm run db:seed` in disposable MongoDB and PostgreSQL generated apps |
+| Change VS Code tasks or IntelliJ Make targets | `src/recipes/render-ide.ts`, `src/recipes/render-checks.ts`, `src/engine/planning.ts` | `node --test test/ide-generation.test.ts` after `npm run build` |
 | Trace a runtime failure | generated `src/main.ts`, `src/create-app.ts`, `src/modules/diagnostics/diagnostic-reader.service.ts` | `node --test test/cli-operations.test.ts` |
 | Explain one generated file | `vcli explain <path>` | owner, renderer and the printed check |
 | Validate private config | `vcli config check --config-file <file>` | names and the next command only |
@@ -17,15 +23,9 @@ The CLI source under `src/` is the current implementation. Planning documents, p
 
 `npm test` uses the built `dist`. An installed-bin check runs `./bin/vcli.mjs` and is the one that can see Node flag handling. Direct handler tests cannot.
 
-Prepared 16 November 2026. Status: standalone repository containing the planning package and owner-authorized independent hand-built references under `examples/reference-api` (MongoDB) and `examples/reference-api-postgres` (PostgreSQL); the private CLI and selected catalog are implemented, with local acceptance and pending external resources recorded per profile.
+## Repository and package
 
-## Repository setup
-
-The planning package has been copied into the root of its own `vcli` repository, with an independent Git history. This directory contains `AGENTS.md`, `docs/`, and `phases/`; begin work here. The original SuperUp checkout and planning copy are preserved.
-
-Only the planning documents were transferred. SuperUp Git history, application projects, environment files, provider credentials, private chat history, memories, local caches, containers, and global agent settings are not part of this repository. The owner authorized this repository setup and private GitHub publication separately from CLI implementation.
-
-The repository is named `vcli`. The npm package name and scope are still an owner decision; private GitHub hosting does not select an npm distribution policy or imply that `vcli` is available on a registry.
+Git is rooted in the parent [VCLI workspace](../README.md). Run npm build and test commands from this `vcli_nestjs/` package. The package manifest and lockfile record the CLI dependencies and runtime range.
 
 ## Read in this order
 
@@ -35,43 +35,27 @@ The repository is named `vcli`. The npm package name and scope are still an owne
 4. [DECISIONS.md](docs/DECISIONS.md): current recommendations, rationale, and unresolved decisions.
 5. [ARCHITECTURE.md](docs/ARCHITECTURE.md): shared implementation contracts.
 6. [VERIFICATION.md](docs/VERIFICATION.md): evidence, compatibility, and phase completion rules.
-7. [Phase index](phases/README.md) and [status board](phases/STATUS.md).
-8. The selected phase's `README.md`, `TASKS.md`, and `ACCEPTANCE.md`.
+7. [CLI verification](docs/CLI-VERIFICATION.md) for recorded evidence, then the guide for the capability you are changing.
 
 The archived original proposal is optional background. The active documents carry the requirements and current recommended design independently; an engineer does not need the old project or chat transcript.
 
-## What exists and what does not
+## Implementation and verification
 
-This package provides design contracts, task order, failure cases, and acceptance requirements for every phase. The separate MongoDB and PostgreSQL projects under [examples](examples/README.md) are owner-authorized hand-built expected-output references. Each contains one native database; package manifests, implementation and recorded checks belong to that individual reference. Native database, HTTP/protocol and browser/restart acceptance passed separately in each reference; earlier combined-catalog checks remain historical. It is not CLI-generated output or proof of CLI phase completion. The repository now contains the private CLI, selected runtime templates, narrow authentication workspace and native operations; it has no published npm release or generated production deployment. Read the reference's own verification record for actual runtime evidence.
+Use the task map above and the current CLI's `--help`. Run the focused check from this package. For output changes, verify a project generated by the CLI. See the [generated project structure guide](docs/CLI-STRUCTURE.md) for a local rendering workflow.
 
-Commands listed by the current CLI --help are executable. Service/operator/maintenance commands follow their recorded profile and acceptance limits; planning examples alone do not make them executable. Phase 00 is historical baseline context. Current dependency pins live in the repository manifests.
-
-## First implementation session
-
-Confirm that the working directory is the standalone VCLI repository and inspect its current instructions and Git status. Do not begin in the SuperUp application directories. If the destination has changed since this package was prepared, preserve those changes and reconcile the plan with the actual source.
-
-Use the task map above for current CLI work. [Phase 00](phases/00-design-baseline/README.md) records the accepted baseline and is historical. Do not claim a design review completed merely because the tasks were written.
-
-The first code milestone is [Phase 01](phases/01-project-foundation/README.md), followed by [Phase 02](phases/02-safe-generation/README.md). It must prove a minimal generated application and a safe incremental addition before the larger provider catalog.
-
-Create only the directories needed for the active work. A possible future source layout appears in the architecture document; it is not an instruction to create every package or feature upfront.
+The former [phase index](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/README.md) and [hand-built reference apps](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/examples/README.md) are historical context. Current acceptance comes from the CLI verification records and checks for the selected capability.
 
 ## Launch prompt for another engineer or agent
 
-Copy this prompt and replace the scope line with the phase or phases actually authorized:
+Fill in the scope line with the authorized task.
 
 ```text
-You are working in the standalone VCLI repository.
+You are working in the vcli_nestjs/ package.
 
-Authorized scope: [for example, complete Phase 00 design baseline only; or,
-after its recorded gate, implement Phases 01 and 02].
+Authorized scope: [describe the selected task].
 
-Read AGENTS.md, START-HERE.md, docs/PRODUCT.md, docs/DECISIONS.md,
-docs/ARCHITECTURE.md, docs/VERIFICATION.md, phases/STATUS.md, and the selected
-phase's README.md, TASKS.md and ACCEPTANCE.md.
-
-Verify the actual repository and environment. This planning package is not
-evidence that source, scripts, provider accounts, or deployments already exist.
+Read AGENTS.md, START-HERE.md, the relevant capability guide, and
+docs/CLI-VERIFICATION.md. Verify the actual source and environment.
 Use the recorded implementation baseline; identify material unresolved choices.
 Keep provider choices extendable through small contracts. Preserve one
 handwritten class per file and the documented owner boundaries.
@@ -83,16 +67,14 @@ tests, copy credentials, modify an unrelated product, or publish/deploy without
 authorization for those actions.
 
 At completion, report files changed, commands actually run, test results,
-remaining gaps, and the next eligible phase. Do not ask for approval again
+and remaining gaps. Do not ask for approval again
 for work already authorized; ask only for material missing decisions or
 permissions that are actually required.
 ```
 
 ## Status and evidence updates
 
-Task IDs use `P03-T01`; acceptance IDs use `P03-A01`. These are planned items until implementation supplies evidence. Check a task only after its deliverable exists. Link acceptance results to an identified revision, environment, command/run, and sanitized artifact.
-
-A phase may be implemented locally while external provider/device acceptance remains pending. It is not fully verified in that case. Later independent work can proceed when its documented entry conditions are satisfied and the user authorized it, but the missing acceptance remains visible and blocks related support claims.
+Link acceptance results to an identified revision, environment, command, and sanitized artifact where available. Report local evidence and pending external acceptance separately.
 
 ## Local operating constraints
 

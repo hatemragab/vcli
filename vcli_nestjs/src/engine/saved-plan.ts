@@ -12,6 +12,7 @@ import {
   json,
   outcomesSchema,
   parseJson,
+  rejectPrivateValues,
   TOOL_VERSION,
   validateConfig,
 } from './data.js';
@@ -19,6 +20,7 @@ import { EngineError } from './engine-error.js';
 import {
   assertNoSymlinks,
   contained,
+  hasFileAncestor,
   readRegular,
   relativePath,
 } from './paths.js';
@@ -63,6 +65,17 @@ const planSchema = z
     pending: z.array(z.string()),
     outcomes: outcomesSchema,
     initialEntries: z.array(z.literal('.git')).optional(),
+    developmentDefaults: z
+      .record(
+        z.string().regex(/^[A-Z][A-Z0-9_]{0,64}$/),
+        z
+          .string()
+          .min(1)
+          .max(4096)
+          .regex(/^[\x20-\x7e]+$/)
+          .refine((value) => !/['`#]/.test(value)),
+      )
+      .optional(),
     sourceMigrations: z
       .array(
         z
@@ -87,7 +100,7 @@ export function validatePlan(input: unknown): GenerationPlan {
       'Use a current private plan produced by this CLI version.',
     );
   const plan = result.data;
-  validateConfig(plan.config);
+  rejectPrivateValues(plan.config);
   if (
     !path.isAbsolute(plan.projectDir) ||
     !path.isAbsolute(plan.workspaceDir) ||
@@ -111,6 +124,24 @@ export function validatePlan(input: unknown): GenerationPlan {
       'INVALID_PLAN',
       'validation',
       'Use initial-directory preconditions only for init.',
+    );
+  if (
+    plan.developmentDefaults &&
+    (plan.kind !== 'init' ||
+      plan.developmentDefaults.NODE_ENV !== 'development' ||
+      [
+        'JWT_KEYS_JSON',
+        'JWT_ACTIVE_KID',
+        'MAIL_DELIVERY_KEYS_JSON',
+        'MAIL_DELIVERY_KEY_ID',
+        'CENTRIFUGO_API_KEY',
+        'CENTRIFUGO_PROXY_SECRET',
+      ].some((key) => Object.hasOwn(plan.developmentDefaults!, key)))
+  )
+    throw new EngineError(
+      'INVALID_PLAN',
+      'validation',
+      'Use public development defaults only in new project plans.',
     );
   const paths = new Set<string>();
   for (const change of plan.changes) {
@@ -140,17 +171,12 @@ export function validatePlan(input: unknown): GenerationPlan {
       );
     paths.add(change.path);
   }
-  for (const change of paths)
-    if (
-      [...paths].some(
-        (other) => other !== change && other.startsWith(`${change}/`),
-      )
-    )
-      throw new EngineError(
-        'INVALID_PLAN',
-        'validation',
-        'A generated file cannot also be a directory.',
-      );
+  if (hasFileAncestor(paths))
+    throw new EngineError(
+      'INVALID_PLAN',
+      'validation',
+      'A generated file cannot also be a directory.',
+    );
   for (const guard of plan.guards) relativePath(guard.path);
   if (
     plan.kind === 'init' &&

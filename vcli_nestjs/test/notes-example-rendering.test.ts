@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  compileNotesWithMedia,
   notesConfig,
   notesFixture,
   notesRenderers,
@@ -38,6 +39,10 @@ for (const database of ['mongodb', 'postgres'] as const) {
     for (const source of files) {
       assert.doesNotMatch(
         source.content,
+        /imageId|vcli:notes-media|MediaService/,
+      );
+      assert.doesNotMatch(
+        source.content,
         /examples\/|reference_notes|RepositoryAdapter|forwardRef|ModuleRef|@Global|\/home\//,
       );
       assert.doesNotMatch(
@@ -51,6 +56,12 @@ for (const database of ['mongodb', 'postgres'] as const) {
       (file) => file.path === 'src/modules/notes/notes.entity.ts',
     )!;
     assert.match(native.content, /app_notes/);
+    const controller = files.find(
+      (file) => file.path === 'src/modules/notes/notes.controller.ts',
+    )!.content;
+    assert.match(controller, /@Patch\(':id'\)/);
+    assert.match(controller, /@Delete\(':id'\)/);
+    assert.match(controller, /@HttpCode\(204\)/);
     const module = files.find(
       (file) => file.path === 'src/modules/notes/notes.module.ts',
     )!.content;
@@ -91,13 +102,27 @@ for (const database of ['mongodb', 'postgres'] as const) {
       (component) => component.component === 'notes',
     );
     assert.equal(notes?.version, 1);
-    assert.match(notes!.digest, /^[0-9a-f]{64}$/);
+    assert.equal(
+      notes?.digest,
+      database === 'mongodb'
+        ? '00e5d7adec6b9da3665cfede291ad14575fece285f303f3353b3986637a23b3d'
+        : '1066a4c012769ca1c1c208dde684138016a12561d18ce24abc79dcafd1e29e42',
+    );
+    const images = selected.components.find(
+      (component) => component.component === 'notes.image',
+    );
+    assert.equal(images?.version, 1);
+    assert.match(images!.digest, /^[0-9a-f]{64}$/);
+    assert.equal(
+      selected.components.indexOf(images!),
+      selected.components.indexOf(notes!) + 1,
+    );
     const baseline = structuredClone(config);
     delete baseline.capabilities.notes;
     const previous = manifest(schema.schemaFiles(baseline));
     assert.deepEqual(
       selected.components.filter(
-        (component) => component.component !== 'notes',
+        ({ component }) => !['notes', 'notes.image'].includes(component),
       ),
       previous.components,
     );
@@ -112,12 +137,37 @@ for (const database of ['mongodb', 'postgres'] as const) {
       selected.components.map((component) => component.component),
     );
     assert.match(initializer, /initializeNotes\(database\)/);
+    assert.match(initializer, /initializeNotesImage\(database\)/);
     assert.match(initializer, /finally\{await database.close\(\);\}/);
     assert(
       !schema
         .schemaFiles(baseline)
         .some((file) => file.content.includes('initializeNotes')),
     );
+  });
+  test(`notes ${database}: owned image closure is conditional and strictly compilable`, async () => {
+    const { notes } = await notesRenderers();
+    const files = await notes.notesFiles(
+      notesConfig(database, undefined, true),
+    );
+    const contents = (name: string) => {
+      const file = files.find((candidate) =>
+        candidate.path.endsWith('/' + name),
+      );
+      assert(file, name);
+      return file.content;
+    };
+    assert.match(contents('notes-input.ts'), /imageId: imageIdSchema/);
+    assert.match(contents('notes.service.ts'), /this\.requireImage\(/);
+    assert.match(
+      contents('notes.module.ts'),
+      /HttpSecurityModule, MediaModule/,
+    );
+    assert.match(contents('notes-image.ts'), /images\.download\(/);
+    assert.match(contents('notes.entity.ts'), /imageId:/);
+    assert.match(contents('initialize-notes-image.ts'), /initializeNotesImage/);
+    assert(files.every((file) => !file.content.includes('vcli:notes-media:')));
+    await compileNotesWithMedia(database);
   });
   test(`notes ${database}: isolated strict compilation and acyclic ordinary Nest source`, async () => {
     const { root } = await notesFixture(database);
@@ -160,9 +210,18 @@ test('notes: reject absent requirements/options and reserve built-in owner name'
       file.content.includes("from '../notes/notes.service.js'"),
     ),
   );
-  assert(
+  const consumer = generated.files.find((file) =>
+    file.path.endsWith('/note-reports.module.ts'),
+  );
+  assert.match(
+    consumer?.content ?? '',
+    /imports: \[DatabaseModule, NotesModule\]/,
+  );
+  assert.ok(
     generated.pending.some((message) =>
-      message.includes('notes:capabilities.notes!'),
+      message.includes(
+        'Add NoteReportsModule to the imports of AppCustomModule',
+      ),
     ),
   );
   const absent = structuredClone(config);

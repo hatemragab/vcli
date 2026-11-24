@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { before, test } from 'node:test';
+import { after, before, test, type TestContext } from 'node:test';
 import {
   readdir,
   cp,
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   chmod,
   lstat,
   symlink,
@@ -14,6 +15,7 @@ import {
 } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { resolve, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
@@ -25,6 +27,7 @@ import type {
   ObjectEvidence,
   UploadEvidence,
 } from '../templates/runtime/common/src/modules/storage/storage.entity.js';
+import { linkGeneratedDependencies } from './generated-dependencies.ts';
 
 type MediaRecord = StorageObject &
   Readonly<{
@@ -54,7 +57,12 @@ type MediaOwnerState = Readonly<{
 
 // Isolated compiler/runtime fixtures only. SDK transport below is a controlled fake,
 // never an AWS/R2 or browser/CORS conformance test.
-const fixture = resolve('var/cli-storage-lifecycle');
+let fixture: string;
+let filesFixture: string;
+const privateFilesystemSkipReason =
+  process.platform === 'linux' || process.platform === 'darwin'
+    ? undefined
+    : 'Private storage requires Linux or macOS';
 type Store = {
   read(owner: string): Promise<MediaOwnerState>;
   change(
@@ -168,6 +176,12 @@ async function runtime<T>(path: string, driver = 'postgres'): Promise<T> {
   )) as T;
 }
 before(async () => {
+  await mkdir(resolve('var'), { recursive: true });
+  fixture = await mkdtemp(resolve('var/cli-storage-lifecycle-'));
+  const tempRoot = await realpath(
+    process.platform === 'darwin' ? '/tmp' : tmpdir(),
+  );
+  filesFixture = await mkdtemp(join(tempRoot, 'vcli-storage-files-'));
   for (const driver of ['postgres', 'mongodb']) {
     const directory = `${fixture}/${driver}`;
     await mkdir(`${directory}/src/modules`, { recursive: true });
@@ -185,6 +199,7 @@ before(async () => {
       { recursive: true },
     );
     for (const name of [
+      'media-state-store.ts',
       'media-transitions.ts',
       'media.controller.ts',
       'media.entity.ts',
@@ -219,49 +234,7 @@ before(async () => {
         `${directory}/src/core/http/${file}`,
       );
     await writeFile(`${directory}/package.json`, '{"type":"module"}\n');
-    const dependencyDirectory = `${directory}/node_modules`;
-    if (
-      await lstat(dependencyDirectory)
-        .then((stat) => stat.isSymbolicLink())
-        .catch(() => false)
-    )
-      await rm(dependencyDirectory);
-    await mkdir(dependencyDirectory, { recursive: true });
-    const referenceModules = resolve(
-      driver === 'postgres'
-        ? 'examples/reference-api-postgres/node_modules'
-        : 'examples/reference-api/node_modules',
-    );
-    for (const installed of [resolve('node_modules'), referenceModules]) {
-      for (const entry of await readdir(installed)) {
-        if (entry.startsWith('.')) continue;
-        const packages = entry.startsWith('@')
-          ? (await readdir(`${installed}/${entry}`)).map(
-              (child) => `${entry}/${child}`,
-            )
-          : [entry];
-        for (const name of packages) {
-          await mkdir(resolve(dependencyDirectory, name, '..'), {
-            recursive: true,
-          });
-          try {
-            await symlink(
-              `${installed}/${name}`,
-              `${dependencyDirectory}/${name}`,
-              'dir',
-            );
-          } catch (error: unknown) {
-            if (!(
-              error &&
-              typeof error === 'object' &&
-              'code' in error &&
-              error.code === 'EEXIST'
-            ))
-              throw error;
-          }
-        }
-      }
-    }
+    await linkGeneratedDependencies(directory);
     await writeFile(
       `${directory}/tsconfig.json`,
       JSON.stringify({
@@ -300,6 +273,13 @@ before(async () => {
     );
   }
 });
+after(async () => {
+  try {
+    if (fixture) await rm(fixture, { recursive: true, force: true });
+  } finally {
+    if (filesFixture) await rm(filesFixture, { recursive: true, force: true });
+  }
+});
 const sha = (bytes: Uint8Array): string =>
   createHash('sha256').update(bytes).digest('hex');
 const bytes = Buffer.from('private untrusted <svg>payload</svg>');
@@ -328,8 +308,7 @@ const r2: StorageProfile = {
   endpoint: 'https://fixture.r2.cloudflarestorage.com',
 };
 async function privateRoot(): Promise<string> {
-  await mkdir(fixture, { recursive: true });
-  return mkdtemp(`${fixture}/files-`);
+  return mkdtemp(join(filesFixture, 'files-'));
 }
 async function local(): Promise<Local> {
   const { LocalStorageService } = await runtime<{
@@ -348,6 +327,11 @@ async function filesystem(root: string) {
   const fs = new PrivateFilesystem(root);
   await fs.initialize();
   return fs;
+}
+function skipUnsupportedPrivateFilesystem(context: TestContext): boolean {
+  if (!privateFilesystemSkipReason) return false;
+  context.skip(privateFilesystemSkipReason);
+  return true;
 }
 function facts(
   root: string,
@@ -629,7 +613,18 @@ async function s3Storage(profile: StorageProfile) {
   };
 }
 
-test('local actual private streaming, attachment bytes, exclusive finalization and replay immutability', async () => {
+test(
+  'private filesystem rejects unsupported hosts',
+  { skip: !privateFilesystemSkipReason },
+  async () => {
+    await assert.rejects(filesystem(await privateRoot()), {
+      code: 'UNSUPPORTED_PRIVATE_FILESYSTEM',
+    });
+  },
+);
+
+test('local actual private streaming, attachment bytes, exclusive finalization and replay immutability', async (t) => {
+  if (skipUnsupportedPrivateFilesystem(t)) return;
   const root = await privateRoot();
   await filesystem(root);
   const storage = await local();
@@ -638,6 +633,8 @@ test('local actual private streaming, attachment bytes, exclusive finalization a
   const evidence = await storage.receive(record, stream(), signal());
   assert.equal(evidence.sha256, record.sha256);
   await storage.finalize({ ...record, evidence }, true);
+  const readyPath = join(root, 'objects', record.attemptId!);
+  assert.equal((await lstat(readyPath)).mode & 0o777, 0o400);
   assert.deepEqual(
     await collect(await storage.download(record, signal())),
     bytes,
@@ -652,8 +649,10 @@ test('local actual private streaming, attachment bytes, exclusive finalization a
   await storage.finalize({ ...record, evidence }, false);
   await storage.remove(record);
   await storage.remove(record);
+  await assert.rejects(lstat(readyPath), { code: 'ENOENT' });
 });
-test('local oversize, wrong digest, stall abort and exclusive-stage failure clean only owned files', async () => {
+test('local oversize, wrong digest, stall abort and exclusive-stage failure clean only owned files', async (t) => {
+  if (skipUnsupportedPrivateFilesystem(t)) return;
   const root = await privateRoot();
   await filesystem(root);
   const storage = await local();
@@ -692,7 +691,8 @@ test('local oversize, wrong digest, stall abort and exclusive-stage failure clea
     code: 'ENOENT',
   });
 });
-test('local traversal, symlink targets/ancestors and loosened root permissions are denied', async () => {
+test('local traversal, symlink targets/ancestors and loosened root permissions are denied', async (t) => {
+  if (skipUnsupportedPrivateFilesystem(t)) return;
   const root = await privateRoot();
   const fs = await filesystem(root);
   const storage = await local();
@@ -715,8 +715,90 @@ test('local traversal, symlink targets/ancestors and loosened root permissions a
   await rm(join(root, 'objects'), { recursive: true });
   await symlink(root, join(root, 'objects'));
   await assert.rejects(storage.finalize(record, true));
+  const targetDirectory = await privateRoot();
+  const alias = join(root, 'alias');
+  await symlink(targetDirectory, alias);
+  await assert.rejects(filesystem(join(alias, 'storage')));
+  assert.deepEqual(await readdir(targetDirectory), []);
 });
-test('both selected state machines: quota races, competing finalizers, replay and current generation authority', async () => {
+test(
+  'macOS private storage rejects a group-writable ancestor before creating areas',
+  { skip: process.platform !== 'darwin' },
+  async () => {
+    const parent = await privateRoot();
+    const root = join(parent, 'storage');
+    await mkdir(root, { mode: 0o700 });
+    await chmod(parent, 0o770);
+    try {
+      await assert.rejects(filesystem(root), { code: 'UNSAFE_STORAGE_PATH' });
+      assert.deepEqual(await readdir(root), []);
+    } finally {
+      await chmod(parent, 0o700);
+    }
+  },
+);
+test('new local media writes privately per owner and legacy roots remain readable', async (t) => {
+  if (skipUnsupportedPrivateFilesystem(t)) return;
+  const app = await setup();
+  const { ownerStorageRoot } = await runtime<{
+    ownerStorageRoot(root: string, ownerId: string): string;
+  }>('modules/storage/storage.entity');
+  for (const invalid of [
+    '..',
+    '../escape',
+    'a/b',
+    'a\\b',
+    'objects',
+    'incoming',
+  ])
+    assert.throws(() => ownerStorageRoot(app.root, invalid), {
+      code: 'UNSAFE_STORAGE_PATH',
+    });
+
+  const root = join(app.root, actor.accountId);
+  const unused = await app.begin();
+  assert.deepEqual(unused.profile, { version: 1, driver: 'local', root });
+  assert.equal(unused.stagingRoot, root);
+  await app.service.remove(actor, unused.id, Date.now());
+  await assert.rejects(lstat(root), { code: 'ENOENT' });
+
+  const scoped = await app.begin();
+  await app.service.receive(actor, scoped.id, stream(), Date.now(), signal());
+  const ready = await app.service.finalize(actor, scoped.id, Date.now());
+  const key = scoped.attemptId!;
+  assert.equal((await lstat(root)).mode & 0o777, 0o700);
+  assert.deepEqual(await readFile(join(root, 'objects', key)), bytes);
+  await assert.rejects(lstat(join(app.root, 'objects', key)), {
+    code: 'ENOENT',
+  });
+  assert.deepEqual(
+    await collect(await app.storage.download(ready, signal())),
+    bytes,
+  );
+
+  const legacy = await app.ledger.reserve({
+    ...facts(app.root),
+    ownerId: actor.accountId,
+    filename: 'legacy.txt',
+    createdAt: Date.now(),
+    expiresAt: Date.now() + 60_000,
+    state: 'reserved',
+  });
+  await app.service.receive(actor, legacy.id, stream(), Date.now(), signal());
+  const legacyReady = await app.service.finalize(actor, legacy.id, Date.now());
+  assert.equal(legacyReady.stagingRoot, app.root);
+  assert.deepEqual(
+    await readFile(join(app.root, 'objects', legacy.attemptId!)),
+    bytes,
+  );
+  assert.deepEqual(
+    await collect(await app.storage.download(legacyReady, signal())),
+    bytes,
+  );
+});
+
+test('both selected state machines: quota races, competing finalizers, replay and current generation authority', async (t) => {
+  if (skipUnsupportedPrivateFilesystem(t)) return;
   for (const driver of ['mongodb', 'postgres']) {
     const store = memory();
     const app = await setup(store, undefined, driver);
@@ -758,10 +840,13 @@ test('both selected state machines: quota races, competing finalizers, replay an
         return actor;
       },
     });
-    await assert.rejects(foreign.service.list(actor), { code: 'UNAUTHORIZED' });
+    await assert.rejects(foreign.service.list(actor), {
+      code: 'UNAUTHORIZED',
+    });
   }
 });
-test('local provider success plus controlled DB failure reconciles exact immutable bytes', async () => {
+test('local provider success plus controlled DB failure reconciles exact immutable bytes', async (t) => {
+  if (skipUnsupportedPrivateFilesystem(t)) return;
   const store = memory(),
     app = await setup(store),
     record = await app.begin();
@@ -780,7 +865,8 @@ test('local provider success plus controlled DB failure reconciles exact immutab
     'ready',
   );
 });
-test('controlled AWS/R2 SDK conditional promotion, checksum differences, lost ACK and unknown outcome', async () => {
+test('controlled AWS/R2 SDK conditional promotion, checksum differences, lost ACK and unknown outcome', async (t) => {
+  if (skipUnsupportedPrivateFilesystem(t)) return;
   for (const profile of [aws, r2]) {
     const root = await privateRoot();
     await filesystem(root);
@@ -825,7 +911,8 @@ test('controlled AWS/R2 SDK conditional promotion, checksum differences, lost AC
     storage.service.close();
   }
 });
-test('controlled multipart bounded grants, replacement denial, lost part/complete ACK and exact manifest', async () => {
+test('controlled multipart bounded grants, replacement denial, lost part/complete ACK and exact manifest', async (t) => {
+  if (skipUnsupportedPrivateFilesystem(t)) return;
   for (const profile of [aws, r2]) {
     const sdk = await s3Storage(profile);
     const { StorageService } = await runtime<{
@@ -940,7 +1027,8 @@ test('controlled multipart bounded grants, replacement denial, lost part/complet
     sdk.service.close();
   }
 });
-test('controlled multipart unknown initiation is listed once and exact-generation cleanup aborts it', async () => {
+test('controlled multipart unknown initiation is listed once and exact-generation cleanup aborts it', async (t) => {
+  if (skipUnsupportedPrivateFilesystem(t)) return;
   const sdk = await s3Storage(aws);
   sdk.loseNextCreate();
   const { StorageService } = await runtime<{
@@ -969,7 +1057,8 @@ test('controlled multipart unknown initiation is listed once and exact-generatio
   assert.equal((await app.service.list(actor)).length, 0);
   sdk.service.close();
 });
-test('expiry/deletion retain reservations, cleanup is bounded, stale generation cannot delete replacement', async () => {
+test('expiry/deletion retain reservations, cleanup is bounded, stale generation cannot delete replacement', async (t) => {
+  if (skipUnsupportedPrivateFilesystem(t)) return;
   const app = await setup();
   const record = await app.begin();
   await app.service.receive(actor, record.id, stream(), Date.now(), signal());
@@ -1070,7 +1159,8 @@ test('AWS direct grant uses the real offline POST helper and exact byte/checksum
     client.destroy();
   }
 });
-test('controlled AWS direct staging replay and wrong bytes cannot replace a ready object', async () => {
+test('controlled AWS direct staging replay and wrong bytes cannot replace a ready object', async (t) => {
+  if (skipUnsupportedPrivateFilesystem(t)) return;
   const root = await privateRoot();
   await filesystem(root);
   const sdk = await s3Storage(aws);
@@ -1099,7 +1189,8 @@ test('controlled AWS direct staging replay and wrong bytes cannot replace a read
   assert.ok(!sdk.objects.has(`media/${bad.id}/${bad.attemptId}`));
   sdk.service.close();
 });
-test('local held file descriptor survives an incoming-directory rename race without following a symlink', async () => {
+test('local held file descriptor survives an incoming-directory rename race without following a symlink', async (t) => {
+  if (skipUnsupportedPrivateFilesystem(t)) return;
   const root = await privateRoot();
   await filesystem(root);
   const storage = await local();
@@ -1120,7 +1211,8 @@ test('local held file descriptor survives an incoming-directory rename race with
   assert.deepEqual(await readdir(outside), []);
   await assert.rejects(storage.finalize(record, true));
 });
-test('controlled claim races fence active finalizers, abort unknown outcomes and keep cleanup bounded', async () => {
+test('controlled claim races fence active finalizers, abort unknown outcomes and keep cleanup bounded', async (t) => {
+  if (skipUnsupportedPrivateFilesystem(t)) return;
   const store = memory();
   const app = await setup(store);
   const record = await app.begin();
@@ -1190,7 +1282,9 @@ test(
   'native selected owner store races (external isolated schema supplied; no startup/migration)',
   {
     skip:
-      !process.env.TEST_DATABASE_URL || !process.env.VCLI_MEDIA_TEST_DATABASE,
+      privateFilesystemSkipReason ||
+      !process.env.TEST_DATABASE_URL ||
+      !process.env.VCLI_MEDIA_TEST_DATABASE,
   },
   async () => {
     const driver = process.env.VCLI_MEDIA_TEST_DATABASE;
@@ -1531,20 +1625,24 @@ test('selected storage/media renderer emits compileable modes, trusted DI, nativ
         ...(await renderer.storageFiles(config)),
         ...(await renderer.mediaFiles(config)),
       ];
+      const setup = files.find(
+        (file) => file.path === 'ops/storage/private-storage-setup.md',
+      )!.content;
+      const selectedModes: readonly string[] = modes;
+      assert.equal(setup.includes('**Local objects.**'), profile === 'local');
+      assert.equal(setup.includes('**AWS S3.**'), profile === 'aws-s3');
+      assert.equal(setup.includes('**Cloudflare R2.**'), profile === 'r2');
+      assert.equal(
+        setup.includes('aws-cors.example.json'),
+        selectedModes.includes('presigned'),
+      );
+      assert.equal(
+        setup.includes('AbortMultipartUpload'),
+        selectedModes.includes('multipart'),
+      );
       const directory = `${fixture}/selected-${driver}-${profile}-${modes.length}`;
       await mkdir(directory, { recursive: true });
-      const modules = `${fixture}/${driver}/node_modules`;
-      try {
-        await symlink(modules, `${directory}/node_modules`, 'dir');
-      } catch (error: unknown) {
-        if (!(
-          error &&
-          typeof error === 'object' &&
-          'code' in error &&
-          error.code === 'EEXIST'
-        ))
-          throw error;
-      }
+      await linkGeneratedDependencies(directory);
       for (const file of files) {
         await mkdir(dirname(`${directory}/${file.path}`), { recursive: true });
         await writeFile(`${directory}/${file.path}`, file.content);
@@ -1555,6 +1653,11 @@ test('selected storage/media renderer emits compileable modes, trusted DI, nativ
       await cp(
         'templates/runtime/common/src/core/http/http-security.module.ts',
         `${directory}/src/core/http/http-security.module.ts`,
+      );
+      await cp(
+        'templates/runtime/common/src/core/bootstrap',
+        `${directory}/src/core/bootstrap`,
+        { recursive: true },
       );
       await mkdir(`${directory}/src/core/config`, { recursive: true });
       await writeFile(
@@ -1667,7 +1770,8 @@ test('controlled AWS direct grant denies versioned buckets before signing', asyn
   }
 });
 
-test('actual download stream slots are bounded and abort before consumption releases file handles safely', async () => {
+test('actual download stream slots are bounded and abort before consumption releases file handles safely', async (t) => {
+  if (skipUnsupportedPrivateFilesystem(t)) return;
   const app = await setup();
   const record = await app.begin();
   await app.service.receive(actor, record.id, stream(), Date.now(), signal());
@@ -1691,7 +1795,8 @@ test('actual download stream slots are bounded and abort before consumption rele
   );
 });
 
-test('ready media exposes partial transient cleanup and bounded retry preserves committed bytes', async () => {
+test('ready media exposes partial transient cleanup and bounded retry preserves committed bytes', async (t) => {
+  if (skipUnsupportedPrivateFilesystem(t)) return;
   const base = await setup();
   let failCleanup = true;
   const wrapped = {} as Objects;
@@ -1728,7 +1833,8 @@ test('ready media exposes partial transient cleanup and bounded retry preserves 
   );
 });
 
-test('controlled AWS/R2 two-part uploads enforce partition bounds and ordered unique manifests', async () => {
+test('controlled AWS/R2 two-part uploads enforce partition bounds and ordered unique manifests', async (t) => {
+  if (skipUnsupportedPrivateFilesystem(t)) return;
   const first = Buffer.alloc(8388608, 0x61),
     last = Buffer.from('last-private-part');
   const completeBody = Buffer.concat([first, last]);

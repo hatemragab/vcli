@@ -16,9 +16,9 @@ export function getSupportCatalog(): SupportCatalog {
     schemaVersion: 1,
     distribution: 'private-unpublished',
     releases: SUPPORTED_TOOL_VERSIONS.map((version) => ({
-      version: supportedRelease(version),
+      version,
       schemaVersion: 1,
-      authRuntime: supportedRelease(version),
+      authRuntime: version,
       node: NODE_ENGINE_RANGE,
       patchOwner: PATCH_OWNER,
     })),

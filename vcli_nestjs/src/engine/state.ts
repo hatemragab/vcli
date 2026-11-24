@@ -9,6 +9,7 @@ import {
   outcomesSchema,
   parseJson,
   canonical,
+  rejectPrivateValues,
   validateConfig,
   SUPPORTED_TOOL_VERSIONS,
   validateIdentifier,
@@ -70,7 +71,7 @@ export function validateLock(value: unknown): ProjectLock {
       'Restore valid schema-1 realized metadata before continuing.',
     );
   const lock = result.data;
-  validateConfig(lock.config);
+  rejectPrivateValues(lock.config);
   if (new Set(lock.migrations).size !== lock.migrations.length)
     throw new EngineError(
       'INVALID_STATE',
@@ -193,6 +194,14 @@ export const journalSchema = z
         .strict(),
     ),
     createdDirectories: z.array(z.string()),
+    developmentEnvironment: z
+      .object({
+        afterHash: hashSchema,
+        device: z.int().nonnegative(),
+        inode: z.int().positive(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export function validateJournal(

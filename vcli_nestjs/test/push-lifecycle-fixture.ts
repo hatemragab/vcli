@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { cp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { linkGeneratedDependencies } from './generated-dependencies.ts';
 export const pushFixtureRoot = resolve('var/cli-push');
 /** Installed caches only, writes confined to worker-owned ignored fixtures. Never touches shared builds. */
 export async function pushFixture(database: 'mongodb' | 'postgres') {
@@ -19,11 +20,17 @@ export async function pushFixture(database: 'mongodb' | 'postgres') {
     `${root}/src/modules/push`,
     { recursive: true },
   );
-  for (const sub of ['core/auth', 'core/errors', 'core/http']) {
+  for (const sub of [
+    'core/auth',
+    'core/bootstrap',
+    'core/errors',
+    'core/http',
+  ]) {
     await mkdir(`${root}/src/${sub}`, { recursive: true });
   }
   for (const [sub, files] of Object.entries({
     'core/auth': ['principal.ts', 'principal-authority.ts'],
+    'core/bootstrap': ['bootstrap-bindings.ts'],
     'core/errors': ['application-error.ts'],
     'core/http': [
       'parse-input.ts',
@@ -38,23 +45,7 @@ export async function pushFixture(database: 'mongodb' | 'postgres') {
         `${root}/src/${sub}/${name}`,
       );
   await writeFile(`${root}/package.json`, '{"type":"module"}\n');
-  try {
-    await symlink(
-      resolve(
-        `examples/reference-api${database === 'postgres' ? '-postgres' : ''}/node_modules`,
-      ),
-      `${root}/node_modules`,
-      'dir',
-    );
-  } catch (error: unknown) {
-    if (!(
-      error &&
-      typeof error === 'object' &&
-      'code' in error &&
-      error.code === 'EEXIST'
-    ))
-      throw error;
-  }
+  await linkGeneratedDependencies(root);
   await writeFile(
     `${root}/tsconfig.json`,
     JSON.stringify({

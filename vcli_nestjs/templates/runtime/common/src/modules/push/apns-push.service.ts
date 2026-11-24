@@ -1,7 +1,6 @@
 import { importPKCS8, SignJWT } from 'jose';
-import { constants as fileConstants } from 'node:fs';
-import { open } from 'node:fs/promises';
 import { ApplicationError } from '../../core/errors/application-error.js';
+import { readPushCredential } from './push-credential-file.js';
 import type { PushSender } from './push.entity.js';
 import type {
   PushDestination,
@@ -49,28 +48,14 @@ export class ApnsPushService implements PushSender {
       config.apnsTopic.endsWith('.voip')
     )
       throw new ApplicationError('INVALID_APNS_CONFIG', 500);
-    const file = await open(
-      config.apnsKeyPath,
-      fileConstants.O_RDONLY | fileConstants.O_NOFOLLOW,
-    ).catch(() => {
-      throw new ApplicationError('INVALID_APNS_PRIVATE_KEY', 500);
-    });
     try {
-      const stat = await file.stat();
-      if (!stat.isFile() || stat.size > 16384 || (stat.mode & 0o077) !== 0)
-        throw new ApplicationError('APNS_KEY_MUST_BE_PRIVATE', 500);
-      const bytes = Buffer.alloc(16385);
-      const read = await file.read(bytes, 0, bytes.length, 0);
-      if (read.bytesRead > 16384) throw new Error('PRIVATE_KEY_TOO_LARGE');
       const key = await importPKCS8(
-        bytes.subarray(0, read.bytesRead).toString('utf8'),
+        await readPushCredential(config.apnsKeyPath, 16384),
         'ES256',
       );
       return new ApnsPushService(config, key, options);
     } catch {
       throw new ApplicationError('INVALID_APNS_PRIVATE_KEY', 500);
-    } finally {
-      await file.close();
     }
   }
   async submit(

@@ -25,6 +25,8 @@ import type {
   DeploymentJournal,
   DeploymentPlan,
   DeploymentSnapshot,
+  JournalStep,
+  NativeDriver,
   OperatorOptions,
   ReconciliationDecision,
   TargetProfile,
@@ -40,6 +42,24 @@ export async function discoverDeployment(
   } catch (error) {
     throw safeError(error);
   }
+}
+
+/** Recover a completed create through discovery without issuing another mutation. */
+async function recoverCreatedResource(
+  plan: DeploymentPlan,
+  driver: NativeDriver,
+  journal: DeploymentJournal,
+  step: JournalStep,
+  journalPath: string,
+): Promise<boolean> {
+  const current = await driver.discover();
+  const id = findCreated(plan, current);
+  if (!id) return false;
+  journal.resourceId = id;
+  journal.checkpoint = current;
+  step.state = 'completed';
+  await writePrivateJson(journalPath, journal);
+  return true;
 }
 
 /** Apply never treats timeout as failure or blindly retries an incomplete request. */
@@ -82,17 +102,17 @@ export async function applyDeployment(
       if (step.state === 'incomplete' || step.state === 'unknown') {
         step.state = 'unknown';
         await writePrivateJson(path.journal, journal);
-        if (step.name === 'create') {
-          const current = await driver.discover();
-          const id = findCreated(plan, current);
-          if (id) {
-            journal.resourceId = id;
-            step.state = 'completed';
-            journal.checkpoint = current;
-            await writePrivateJson(path.journal, journal);
-            continue;
-          }
-        }
+        if (
+          step.name === 'create' &&
+          (await recoverCreatedResource(
+            plan,
+            driver,
+            journal,
+            step,
+            path.journal,
+          ))
+        )
+          continue;
         fail('UNKNOWN_OPERATION_RECONCILIATION_REQUIRED');
       }
       const before = await driver.discover();
@@ -120,18 +140,18 @@ export async function applyDeployment(
         step.state = 'unknown';
         journal.verified = false;
         await writePrivateJson(path.journal, journal);
-        // Recovery is discovery only: no second POST and no credential/volume replacement.
         if (step.name === 'create') {
           try {
-            const current = await driver.discover();
-            const id = findCreated(plan, current);
-            if (id) {
-              journal.resourceId = id;
-              journal.checkpoint = current;
-              step.state = 'completed';
-              await writePrivateJson(path.journal, journal);
+            if (
+              await recoverCreatedResource(
+                plan,
+                driver,
+                journal,
+                step,
+                path.journal,
+              )
+            )
               continue;
-            }
           } catch {
             /* Preserve unknown and the original fixed failure. */
           }

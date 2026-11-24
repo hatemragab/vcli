@@ -11,6 +11,29 @@ export function formatTextData(operation: string, payload: unknown): string[] {
   if (Array.isArray(payload)) return formatArrayLines(operation, payload);
   const data = asRecord(payload);
   if (!data) return [];
+  if (operation === 'smoke.notes' && Array.isArray(data.checks))
+    return data.checks
+      .filter((check): check is string => typeof check === 'string')
+      .map((check) => `Passed ${check}`);
+  if (operation === 'firebase.setup') {
+    const lines = [`target: ${String(data.target)}`];
+    if (typeof data.projectId === 'string')
+      lines.push(
+        `project: ${data.projectId} (${String(data.projectAction ?? data.mode)})`,
+      );
+    if (data.mode === 'cancelled') return ['Project creation cancelled.'];
+    if (Array.isArray(data.keys))
+      lines.push(`${String(data.configFile)}: ${data.keys.join(', ')}`);
+    if (
+      Array.isArray(data.requiredSignInMethods) &&
+      data.requiredSignInMethods.length
+    )
+      lines.push(
+        `Enable the selected Firebase sign-in methods: ${data.requiredSignInMethods.join(', ')}`,
+      );
+    if (typeof data.next === 'string') lines.push(data.next);
+    return lines;
+  }
   if (operation === 'upgrade' && asRecord(data.generation)) {
     const lines = formatObjectLines(asRecord(data.generation)!);
     const maintenance = asRecord(data.maintenance);
@@ -86,6 +109,8 @@ function formatObjectLines(data: Record<string, unknown>): string[] {
       for (const warning of data.warnings)
         if (typeof warning === 'string') lines.push(warning);
   }
+  if (Array.isArray(data.privateFiles) && data.privateFiles.length)
+    lines.push(`Private local config: ${data.privateFiles.join(', ')}`);
   const outcomes = asRecord(data.outcomes);
   if (
     outcomes &&

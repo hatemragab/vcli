@@ -1,17 +1,55 @@
 import {
   CONFIG_ERROR_CODES,
+  LOCAL_DEVELOPMENT_STORAGE_ROOT,
   type ProjectConfig,
   type RenderedFile,
 } from '../contracts.js';
 import { bundled, file, json } from './bundle.js';
-import { selection } from './selection.js';
+import { basicLocalAuth, selection } from './selection.js';
+
+function generatedAppModule(config: ProjectConfig): RenderedFile {
+  const modules = [
+    ['LoggingModule', '../core/logging/logging.module.js'],
+    ['HealthModule', '../modules/health/health.module.js'],
+  ];
+  if (selection(config, 'database'))
+    modules.push(['DatabaseModule', '../core/database/database.module.js']);
+  if (selection(config, 'auth'))
+    modules.push(
+      basicLocalAuth(config)
+        ? ['AuthModule', '../modules/auth/auth.module.js']
+        : ['IdentityModule', '../modules/identity/identity.module.js'],
+    );
+  const optionalModules = [
+    ['mail', 'MailModule'],
+    ['storage', 'StorageModule'],
+    ['media', 'MediaModule'],
+    ['notes', 'NotesModule'],
+    ['realtime', 'RealtimeModule'],
+    ['diagnostics', 'DiagnosticsModule'],
+  ] as const;
+  for (const [family, module] of optionalModules)
+    if (selection(config, family))
+      modules.push([module, `../modules/${family}/${family}.module.js`]);
+  if (selection(config, 'push-fcm') || selection(config, 'push-apns'))
+    modules.push(['PushModule', '../modules/push/push.module.js']);
+  return file(
+    'src/generated/vcli-app.module.ts',
+    `import {Module} from '@nestjs/common';
+${modules.map(([module, path]) => `import {${module}} from '${path}';`).join('\n')}
+/** VCLI-owned composition; put custom features in AppCustomModule. */
+@Module({imports:[${modules.map(([module]) => module).join(',')}]})
+export class VcliAppModule {}
+`,
+  );
+}
 
 export async function foundationFiles(
   config: ProjectConfig,
 ): Promise<RenderedFile[]> {
   const common = [
+    'core/bootstrap/bootstrap-bindings.ts',
     'core/errors/application-error.ts',
-    'core/errors/diagnostic-error-code.ts',
     'core/logging/app-logger.service.ts',
     'core/logging/logging.module.ts',
     'core/logging/log-event-schema.ts',
@@ -84,12 +122,8 @@ export const buildId=readBuildId();
 `,
     ),
     file(
-      'src/core/configured-capabilities.ts',
-      "import type {DynamicModule} from '@nestjs/common';\nexport type ConfiguredCapabilities=Readonly<Partial<Record<'database'|'auth'|'mail'|'storage'|'media'|'notes'|'push'|'realtime'|'diagnostics',DynamicModule>>>;\n",
-    ),
-    file(
       '.gitignore',
-      'node_modules/\n/dist/\nvar/\n.env\n.env.*\n!.env.*.example\n.vcli/\n*.tgz\n',
+      `node_modules/\n/dist/\nvar/\n/${LOCAL_DEVELOPMENT_STORAGE_ROOT}/\n.env\n.env.*\n!.env.*.example\n/firebase-admin.json\n.vcli/\n*.tgz\n`,
       'scaffold',
     ),
     file(
@@ -134,17 +168,14 @@ export default tseslint.config({ignores:['dist/**','node_modules/**']},js.config
     ),
     file(
       'src/app.custom.module.ts',
-      "import {Module,type DynamicModule} from '@nestjs/common';\nimport type {ConfiguredCapabilities} from './core/configured-capabilities.js';\n// Developer-owned: pass configured exported modules to your own consumer modules.\n@Module({})\nexport class AppCustomModule {static register(_capabilities:ConfiguredCapabilities):DynamicModule{return {module:AppCustomModule,imports:[]};}}\n",
+      "import {Module} from '@nestjs/common';\n// Developer-owned: add your feature modules to imports.\n@Module({imports:[]})\nexport class AppCustomModule {}\n",
       'scaffold',
     ),
     file(
       'src/app.module.ts',
-      "import {Module,type DynamicModule} from '@nestjs/common';\nimport {AppCustomModule} from './app.custom.module.js';\nimport {VcliAppModule} from './generated/vcli-app.module.js';\nimport type {ConfiguredCapabilities} from './core/configured-capabilities.js';\n@Module({})\nexport class AppModule {static register(features:readonly DynamicModule[],capabilities:ConfiguredCapabilities):DynamicModule{return {module:AppModule,imports:[VcliAppModule.register(features),AppCustomModule.register(capabilities)]};}}\n",
+      "import {Module} from '@nestjs/common';\nimport {AppCustomModule} from './app.custom.module.js';\nimport {VcliAppModule} from './generated/vcli-app.module.js';\n@Module({imports:[VcliAppModule,AppCustomModule]})\nexport class AppModule {}\n",
     ),
-    file(
-      'src/generated/vcli-app.module.ts',
-      "import {Module,type DynamicModule} from '@nestjs/common';\n/** VCLI-owned composition; put custom features in AppCustomModule. */\n@Module({})\nexport class VcliAppModule {static register(features:readonly DynamicModule[]):DynamicModule{return {module:VcliAppModule,imports:[...features]};}}\n",
-    ),
+    generatedAppModule(config),
     file(
       'src/modules/health/health-state.service.ts',
       "import {Injectable} from '@nestjs/common';\n@Injectable()\nexport class HealthStateService {private initialized=false; private schemaReleaseId:string|undefined; ready():boolean{return this.initialized;} facts():Readonly<{schemaReleaseId?:string}>{return this.schemaReleaseId?{schemaReleaseId:this.schemaReleaseId}:{};} markReady(schemaReleaseId?:string):void{this.schemaReleaseId=schemaReleaseId;this.initialized=true;} markStopping():void{this.initialized=false;}}\n",
@@ -169,7 +200,7 @@ import {loadConfig,loadSelectedEnvFile} from './core/config/load-config.js';
 import {ApplicationError} from './core/errors/application-error.js';
 import {AppLoggerService} from './core/logging/app-logger.service.js';
 const configCodes=new Set(${JSON.stringify(CONFIG_ERROR_CODES)});
-function guidance(stage:string,code:string):string{if(stage==='schema'||code==='SCHEMA_RELEASE_REQUIRED')return 'vcli release apply';if(stage==='config'||configCodes.has(code))return 'vcli config check';if(stage==='database')return 'vcli services status';return 'vcli dev';}
+function guidance(stage:string,code:string):string{if(stage==='schema'||code==='SCHEMA_RELEASE_REQUIRED')return 'vcli release apply';if(stage==='config'||configCodes.has(code))return 'vcli config check';if(stage==='database')return 'vcli services status';if(code==='STORAGE_UNAVAILABLE')return 'Check LOCAL_STORAGE_ROOT and ops/storage/private-storage-setup.md';return 'vcli dev';}
 let runtime:ApplicationRuntime|undefined;
 let stage:'config'|'modules'|'listen'='config';
 try {loadSelectedEnvFile();const config=loadConfig();stage='modules';runtime=await createApp(config);stage='listen';await runtime.app.listen(runtime.config.port,runtime.config.host);runtime.logger.record({event:'application.started',severity:'info',stage:'listen'});

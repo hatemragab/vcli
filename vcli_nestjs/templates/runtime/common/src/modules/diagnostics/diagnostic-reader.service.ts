@@ -26,7 +26,11 @@ import {
 import { testResultQuerySchema } from './test-result-schema.js';
 import { z } from 'zod';
 import type { AppConfig } from '../../core/config/app-config.js';
-import { evidenceByteBounds } from '../../core/diagnostics/evidence-bounds.js';
+import {
+  evidenceByteBounds,
+  evidenceFileBounds,
+  validEvidenceLimits,
+} from '../../core/diagnostics/evidence-bounds.js';
 import { ApplicationError } from '../../core/errors/application-error.js';
 import type {
   DiagnosticPage,
@@ -53,7 +57,7 @@ const cursorSchema = z.strictObject({
   files: z.array(fileSchema).max(50),
   unavailable: z.array(diagnosticSourceSchema).max(5),
   index: z.number().int().min(0).max(50),
-  offset: z.number().int().min(0).max(10485760),
+  offset: z.number().int().min(0).max(evidenceByteBounds.maximum),
 });
 type Cursor = z.infer<typeof cursorSchema>;
 /** Fixed operator-configured scope; query arguments cannot select another directory. */
@@ -84,18 +88,7 @@ export class DiagnosticReaderService implements DiagnosticReader {
       )
     )
       throw new ApplicationError('INVALID_DIAGNOSTIC_FILTER');
-    if (
-      !Number.isInteger(config.maxFiles) ||
-      config.maxFiles < 1 ||
-      config.maxFiles > 10 ||
-      !Number.isInteger(config.maxBytes) ||
-      config.maxBytes < evidenceByteBounds.minimum ||
-      config.maxBytes > evidenceByteBounds.maximum ||
-      (config.maxAgeMs !== undefined &&
-        (!Number.isInteger(config.maxAgeMs) ||
-          config.maxAgeMs < 1000 ||
-          config.maxAgeMs > 604800000))
-    )
+    if (!validEvidenceLimits(config))
       throw new ApplicationError('INVALID_DIAGNOSTIC_FILTER');
   }
   async getTestResult(input: unknown): Promise<DiagnosticPage> {
@@ -368,7 +361,10 @@ export class DiagnosticReaderService implements DiagnosticReader {
           if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink())
             throw new Error('UNSAFE_SOURCE_DIRECTORY');
           const names = await listEvidenceFiles(directory);
-          if (names.length > this.config.maxFiles || names.length > 10)
+          if (
+            names.length > this.config.maxFiles ||
+            names.length > evidenceFileBounds.maximum
+          )
             throw new Error('EVIDENCE_LIMIT');
           for (const name of names) {
             const stat = await lstat(join(directory, name));

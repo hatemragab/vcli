@@ -142,7 +142,10 @@ test('foundation is deterministic, complete and independent of every optional SD
     ),
     false,
   );
-  assert.match(contents(first, 'src/create-app.ts'), /HealthModule/);
+  assert.match(
+    contents(first, 'src/generated/vcli-app.module.ts'),
+    /imports:\s*\[[^\]]*\bHealthModule\b/,
+  );
   assert.match(contents(first, 'src/create-app.ts'), /markStopping/);
   assert.equal(
     first.files.find((f) => f.path === 'src/app.custom.module.ts')?.ownership,
@@ -237,7 +240,11 @@ for (const database of ['mongodb', 'postgres'])
       );
       assert.match(
         contents(project, 'src/modules/identity/identity.module.ts'),
-        /DatabaseModule\.register\(db\)/,
+        /@Module\(\{\s*imports:\s*\[[^\]]*\bDatabaseModule\b/,
+      );
+      assert.match(
+        contents(project, 'src/create-app.ts'),
+        /bindDatabase\(db\)/,
       );
       assert.equal(
         project.files.find(
@@ -368,10 +375,25 @@ for (const realtime of ['socket-io', 'native-ws', 'centrifugo'])
       contents(project, 'src/modules/realtime/realtime.module.ts'),
       /exports: \[RealtimeService,/,
     );
+    const hasTickets = realtime !== 'socket-io';
+    const startupConfig = contents(project, 'src/core/config/load-config.ts');
+    assert.equal(
+      startupConfig.includes('REALTIME_TICKET_TTL_SECONDS'),
+      hasTickets,
+    );
+    assert.equal(startupConfig.includes('ticketTtlSeconds'), hasTickets);
+    assert.equal(
+      project.developmentDefaults?.REALTIME_TICKET_TTL_SECONDS,
+      hasTickets ? '30' : undefined,
+    );
+    assert.equal(
+      project.files.some((file) => file.path.startsWith('.env.')),
+      false,
+    );
     if (realtime === 'centrifugo') {
-      assert.match(
-        contents(project, '.env.development.example'),
-        /CENTRIFUGO_API_URL=http:\/\/127\.0\.0\.1:9000\/api/,
+      assert.equal(
+        project.developmentDefaults?.CENTRIFUGO_API_URL,
+        'http://127.0.0.1:9000/api',
       );
       assert.match(
         contents(project, 'ops/centrifugo/compose.yml'),
@@ -469,9 +491,37 @@ test('name-only scaffolds are typed, native and unexposed', async () => {
       contents(result, 'src/modules/project-item/project-item.service.ts'),
       /extends BaseRepository<ProjectItem>/,
     );
+    assert.match(
+      contents(result, 'src/modules/project-item/project-item.module.ts'),
+      /imports: \[DatabaseModule\]/,
+    );
     const merged = await render(selected);
     merged.files.push(...result.files);
     assertImports(merged);
+  }
+  const databaseFeature = await renderScaffold(config('database.postgres'), {
+    kind: 'feature',
+    name: 'database',
+  });
+  assert.match(
+    contents(databaseFeature, 'src/modules/database/database.module.ts'),
+    /imports: \[VcliDatabaseModule\]/,
+  );
+  for (const kind of ['feature', 'repository'] as const) {
+    const name = 'mongo-record';
+    const generated = await renderScaffold(config('database.mongodb'), {
+      kind,
+      name,
+    });
+    const entity = contents(generated, `src/modules/${name}/${name}.entity.ts`);
+    assert.equal(entity.match(/new Schema</g)?.length, 1);
+    assert.match(entity, /_id: \{ type: String, required: true \}/);
+    assert.match(
+      entity,
+      /id: \{ type: String, required: true, unique: true \}/,
+    );
+    assert.match(entity, /collection: 'mongo_record'/);
+    assert.doesNotMatch(entity, /\$jsonSchema|\.add\(/);
   }
   await assert.rejects(
     renderScaffold(config(), { kind: 'repository', name: 'entry' }),
@@ -481,6 +531,17 @@ test('name-only scaffolds are typed, native and unexposed', async () => {
     renderScaffold(config(), { kind: 'service', name: '../escape' }),
     /INVALID_OR_RESERVED/,
   );
+  const basic = config('database.mongodb', 'auth.local');
+  basic.capabilities.auth!.options.profile = 'basic';
+  await assert.rejects(
+    renderScaffold(basic, { kind: 'dto', name: 'auth' }),
+    /INVALID_OR_RESERVED_SCAFFOLD_NAME/,
+  );
+  const customAuth = await renderScaffold(config(), {
+    kind: 'dto',
+    name: 'auth',
+  });
+  assert.equal(customAuth.files[0]?.path, 'src/modules/auth/auth.dto.ts');
   await assert.rejects(
     renderScaffold(config(), { kind: 'realtime', name: 'updates' }),
     /AUTH_AND_REALTIME_REQUIRED/,

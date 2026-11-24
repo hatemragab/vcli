@@ -1,4 +1,6 @@
 /** Import into an authenticated Node/browser client; credentials stay in caller-owned memory. */
+import { readApiError } from './api-error.mjs';
+
 export function createNotesClient({ baseUrl, accessToken, sessionSecret }) {
   const base = new URL(baseUrl);
   if (
@@ -22,18 +24,21 @@ export function createNotesClient({ baseUrl, accessToken, sessionSecret }) {
         redirect: 'error',
       },
     );
-    const value = await response.json();
-    if (!response.ok) {
-      const error = new Error(value?.error?.code ?? 'NOTES_REQUEST_FAILED');
-      error.status = response.status;
-      throw error;
-    }
-    return value;
+    if (response.status === 204) return;
+    if (!response.ok)
+      throw await readApiError(response, 'NOTES_REQUEST_FAILED');
+    return response.json();
   };
   return {
     // A response/network failure does not imply the write failed. Never automatically retry POST.
     create: (input) =>
       request('', { method: 'POST', body: JSON.stringify(input) }),
+    edit: (id, patch) =>
+      request(`/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      }),
+    remove: (id) => request(`/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     list: (limit = 20) => request(`?limit=${encodeURIComponent(limit)}`),
     get: (id) => request(`/${encodeURIComponent(id)}`),
   };

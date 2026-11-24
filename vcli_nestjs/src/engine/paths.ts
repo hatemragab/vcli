@@ -48,6 +48,18 @@ export function relativePath(value: string, internal = false): string {
     );
   return value;
 }
+
+export function hasFileAncestor(paths: ReadonlySet<string>): boolean {
+  for (const file of paths) {
+    let separator = file.indexOf('/');
+    while (separator !== -1) {
+      if (paths.has(file.slice(0, separator))) return true;
+      separator = file.indexOf('/', separator + 1);
+    }
+  }
+  return false;
+}
+
 export function contained(root: string, candidate: string): void {
   const relative = path.relative(root, candidate);
   if (
@@ -141,8 +153,7 @@ export async function readRegular(file: string): Promise<Buffer | null> {
     await handle?.close();
   }
 }
-export async function expectedFile(file: string): Promise<ExpectedFile> {
-  const bytes = await readRegular(file);
+export function fileExpectation(bytes: Buffer | null): ExpectedFile {
   return bytes === null
     ? { kind: 'absent' }
     : { kind: 'hash', hash: hash(bytes) };
@@ -151,7 +162,7 @@ export async function checkExpected(
   file: string,
   expected: ExpectedFile,
 ): Promise<void> {
-  const actual = await expectedFile(file);
+  const actual = fileExpectation(await readRegular(file));
   if (
     actual.kind !== expected.kind ||
     (actual.kind === 'hash' &&

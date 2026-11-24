@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { before, test } from 'node:test';
-import { cp, mkdir, symlink, writeFile } from 'node:fs/promises';
+import { after, before, test } from 'node:test';
+import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -11,9 +11,10 @@ import type {
   MailOutcome,
 } from '../templates/runtime/common/src/core/mail/mail-submitter.js';
 import type { FirebaseActionPolicy } from '../templates/runtime/common/src/modules/mail/firebase-action-policy.js';
+import { linkGeneratedDependencies } from './generated-dependencies.ts';
 
 // Worker-owned isolated compilation; no installs, root dist, shared services or network.
-const fixture = resolve('var/cli-mail-lifecycle');
+let fixture: string;
 async function runtime<T>(path: string, driver = 'postgres'): Promise<T> {
   return (await import(
     pathToFileURL(`${fixture}/${driver}/dist/${path}.js`).href
@@ -178,6 +179,8 @@ type Links = {
   };
 };
 before(async () => {
+  await mkdir(resolve('var'), { recursive: true });
+  fixture = await mkdtemp(resolve('var/cli-mail-lifecycle-'));
   for (const driver of ['mongodb', 'postgres']) {
     const root = `${fixture}/${driver}`;
     await mkdir(`${root}/src/core/errors`, { recursive: true });
@@ -193,20 +196,7 @@ before(async () => {
       await cp(`templates/runtime/${driver}/src/${sub}`, `${root}/src/${sub}`, {
         recursive: true,
       });
-    const modules = resolve(
-      `examples/reference-api${driver === 'postgres' ? '-postgres' : ''}/node_modules`,
-    );
-    try {
-      await symlink(modules, `${root}/node_modules`, 'dir');
-    } catch (error: unknown) {
-      if (
-        !error ||
-        typeof error !== 'object' ||
-        !('code' in error) ||
-        error.code !== 'EEXIST'
-      )
-        throw error;
-    }
+    await linkGeneratedDependencies(root);
     await writeFile(`${root}/package.json`, JSON.stringify({ type: 'module' }));
     await writeFile(
       `${root}/tsconfig.json`,
@@ -234,6 +224,9 @@ before(async () => {
     );
     assert.equal(result.status, 0, result.stdout + result.stderr);
   }
+});
+after(async () => {
+  if (fixture) await rm(fixture, { recursive: true, force: true });
 });
 const message = (id: string = randomUUID()): MailMessage => ({
   operationId: id,

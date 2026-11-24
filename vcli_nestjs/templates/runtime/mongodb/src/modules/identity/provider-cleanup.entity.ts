@@ -1,25 +1,6 @@
 import { Schema } from 'mongoose';
-export type ProviderCleanup = Readonly<{
-  id: string;
-  identityKey: string;
-  generation: number;
-  action: 'revoke' | 'delete' | 'unlink';
-  method: string | null;
-  status:
-    'pending' | 'leased' | 'retry' | 'unknown' | 'completed' | 'exhausted';
-  attempts: number;
-  nextAttemptAt: number;
-  leaseId: string | null;
-  leaseUntil: number;
-  lastCode:
-    | 'NONE'
-    | 'PROVIDER_RETRY'
-    | 'PROVIDER_UNKNOWN'
-    | 'PROVIDER_REJECTED'
-    | 'STALE_BINDING';
-  createdAt: number;
-  completedAt: number | null;
-}>;
+import type { ProviderCleanup } from './credential-ports.js';
+export type { ProviderCleanup } from './credential-ports.js';
 export const providerCleanupSchema = new Schema<ProviderCleanup>(
   {
     id: String,
@@ -37,7 +18,7 @@ export const providerCleanupSchema = new Schema<ProviderCleanup>(
     completedAt: { type: Number, default: null },
   },
   {
-    collection: 'ref_provider_cleanup',
+    collection: 'provider_cleanup',
     autoCreate: false,
     autoIndex: false,
     versionKey: false,

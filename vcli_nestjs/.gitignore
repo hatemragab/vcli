@@ -12,6 +12,10 @@ node_modules
 coverage/
 *.log
 
+# Local browser captures and generated development app
+/.playwright-mcp/
+/examples/my-new-api-2/
+
 # Local editor/OS files
 .DS_Store
 Thumbs.db

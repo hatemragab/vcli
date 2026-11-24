@@ -3,7 +3,7 @@ import type { MongoDatabase } from '../../core/database/mongo-database.js';
 export async function migrateInstallationLifecycle(
   database: MongoDatabase,
 ): Promise<void> {
-  const collection = database.connection.db!.collection('ref_installations');
+  const collection = database.connection.db!.collection('installations');
   await collection.updateMany(
     { capabilityHash: { $exists: false } },
     { $set: { capabilityHash: null } },

@@ -1,6 +1,7 @@
 import type { ProjectConfig } from '../contracts.js';
 import { actionOriginHelper, actionPolicyGuard } from './config-snippets.js';
-import { selection, usernameAuth } from './selection.js';
+import { basicLocalAuth, selection, usernameAuth } from './selection.js';
+import { serviceResourceName } from './service-resource-name.js';
 
 export interface ConfigField {
   key: string;
@@ -16,6 +17,11 @@ export interface ConfigDraft {
   helpers: string[];
 }
 
+export function developmentMongoUrl(project: string, port = '27017'): string {
+  const database = serviceResourceName(project, 'development');
+  return `mongodb://127.0.0.1:${port}/${database}?replicaSet=rs0&directConnection=true`;
+}
+
 export function contributeDatabase(
   draft: ConfigDraft,
   config: ProjectConfig,
@@ -26,7 +32,7 @@ export function contributeDatabase(
       key: 'DATABASE_URL',
       schema: `z.string().regex(${mongo ? '/^mongodb(?:\\+srv)?:\\/\\//' : '/^postgres(?:ql)?:\\/\\//'})`,
       example: mongo
-        ? 'mongodb://127.0.0.1:27017/app?replicaSet=rs0&directConnection=true'
+        ? developmentMongoUrl(config.project.name)
         : 'postgresql://app:CHANGE_ME@127.0.0.1:5432/app',
       production: '',
     });
@@ -42,14 +48,27 @@ export function contributeAuth(
   auth: string | undefined,
 ): void {
   if (auth) {
-    draft.fields.push(
-      {
-        key: 'SESSION_TTL_SECONDS',
-        schema: 'number(86400,2592000)',
-        example: '86400',
-      },
-      { key: 'RECENT_AUTH_SECONDS', schema: 'number(300,900)', example: '300' },
-    );
+    const basic = basicLocalAuth(config);
+    draft.fields.push({
+      key: 'REDIS_URL',
+      schema:
+        'z.url({protocol:/^rediss?$/}).refine((value)=>Boolean(URL.parse(value)?.hostname))',
+      example: 'redis://127.0.0.1:6379',
+      production: '',
+    });
+    if (!basic)
+      draft.fields.push(
+        {
+          key: 'SESSION_TTL_SECONDS',
+          schema: 'number(86400,2592000)',
+          example: '86400',
+        },
+        {
+          key: 'RECENT_AUTH_SECONDS',
+          schema: 'number(300,900)',
+          example: '300',
+        },
+      );
     let details: string;
     if (auth === 'auth.local') {
       draft.fields.push(
@@ -65,16 +84,21 @@ export function contributeAuth(
           example: '',
           production: '',
         },
-        {
-          key: 'JWT_MAX_LIFETIME_SECONDS',
-          schema: 'number(900,86400)',
-          example: '900',
-        },
-        {
-          key: 'JWT_MAX_FUTURE_ISSUED_SECONDS',
-          schema: 'z.coerce.number().int().min(0).max(60).default(0)',
-          example: '0',
-        },
+      );
+      if (!basic)
+        draft.fields.push(
+          {
+            key: 'JWT_MAX_LIFETIME_SECONDS',
+            schema: 'number(900,86400)',
+            example: '900',
+          },
+          {
+            key: 'JWT_MAX_FUTURE_ISSUED_SECONDS',
+            schema: 'z.coerce.number().int().min(0).max(60).default(0)',
+            example: '0',
+          },
+        );
+      draft.fields.push(
         {
           key: 'JWT_ISSUER',
           schema: "z.string().min(1).default('app')",
@@ -87,16 +111,20 @@ export function contributeAuth(
         },
         {
           key: 'ACCESS_TTL_SECONDS',
-          schema: 'number(300,3600)',
-          example: '300',
+          schema: basic ? 'number(3600,86400)' : 'number(300,3600)',
+          example: basic ? '3600' : '300',
         },
       );
       draft.guards.push(
-        "if(new Set(e.JWT_KEYS_JSON.map(key=>key.id)).size!==e.JWT_KEYS_JSON.length || new Set(e.JWT_KEYS_JSON.map(key=>Buffer.from(key.key).toString('base64url'))).size!==e.JWT_KEYS_JSON.length || !e.JWT_KEYS_JSON.some(key=>key.id===e.JWT_ACTIVE_KID) || e.ACCESS_TTL_SECONDS>e.JWT_MAX_LIFETIME_SECONDS) throw new ApplicationError('INVALID_JWT_POLICY',500);",
+        `if(new Set(e.JWT_KEYS_JSON.map(key=>key.id)).size!==e.JWT_KEYS_JSON.length || new Set(e.JWT_KEYS_JSON.map(key=>Buffer.from(key.key).toString('base64url'))).size!==e.JWT_KEYS_JSON.length || !e.JWT_KEYS_JSON.some(key=>key.id===e.JWT_ACTIVE_KID)${basic ? '' : ' || e.ACCESS_TTL_SECONDS>e.JWT_MAX_LIFETIME_SECONDS'}) throw new ApplicationError('INVALID_JWT_POLICY',500);`,
       );
       details =
-        (usernameAuth(config) ? "identifier:'username' as const," : '') +
-        'jwtPolicy:{issuer:e.JWT_ISSUER,audience:e.JWT_AUDIENCE,keys:e.JWT_KEYS_JSON,activeSigningKeyId:e.JWT_ACTIVE_KID,maxLifetimeSeconds:e.JWT_MAX_LIFETIME_SECONDS,maxFutureIssuedSeconds:e.JWT_MAX_FUTURE_ISSUED_SECONDS},accessTtlSeconds:e.ACCESS_TTL_SECONDS';
+        (usernameAuth(config)
+          ? "identifier:'username' as const,"
+          : basic
+            ? "identifier:'email' as const,"
+            : '') +
+        `jwtPolicy:{issuer:e.JWT_ISSUER,audience:e.JWT_AUDIENCE,keys:e.JWT_KEYS_JSON,activeSigningKeyId:e.JWT_ACTIVE_KID,maxLifetimeSeconds:${basic ? 'e.ACCESS_TTL_SECONDS' : 'e.JWT_MAX_LIFETIME_SECONDS'},maxFutureIssuedSeconds:${basic ? '0' : 'e.JWT_MAX_FUTURE_ISSUED_SECONDS'}},accessTtlSeconds:e.ACCESS_TTL_SECONDS`;
     } else {
       draft.fields.push({
         key: 'FIREBASE_PROJECT_ID',
@@ -120,7 +148,7 @@ export function contributeAuth(
       details = `firebaseProjectId:e.FIREBASE_PROJECT_ID,firebaseMethods:${JSON.stringify(selected)} as readonly ('password'|'phone'|'google.com'|'apple.com')[]`;
     }
     draft.output.push(
-      `auth:{driver:'${auth === 'auth.local' ? 'local' : 'firebase'}' as const,sessionTtlSeconds:e.SESSION_TTL_SECONDS,recentAuthSeconds:e.RECENT_AUTH_SECONDS,${details}}`,
+      `auth:{driver:'${auth === 'auth.local' ? 'local' : 'firebase'}' as const,rateLimitRedisUrl:e.REDIS_URL,rateLimitNamespace:${JSON.stringify(config.project.name + ':')}+e.NODE_ENV,${basic ? '' : 'sessionTtlSeconds:e.SESSION_TTL_SECONDS,recentAuthSeconds:e.RECENT_AUTH_SECONDS,'}${details}}`,
     );
   }
 }

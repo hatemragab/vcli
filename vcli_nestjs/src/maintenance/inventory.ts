@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { canonical, hash, parseJson } from '../engine/data.js';
+import { hash, parseJson } from '../engine/data.js';
 import { installationHealthy } from '../engine/inspection.js';
 import { readProject } from '../engine/state.js';
 import { projectPath, readRegular } from '../engine/paths.js';
@@ -15,8 +15,6 @@ export function packageFacts(content: string): {
   name: string;
   version: string;
   exports?: unknown;
-  peerDependencies?: unknown;
-  peerDependenciesMeta?: unknown;
 } | null {
   const input: unknown = parseJson(content, 'maintenance');
   if (
@@ -32,12 +30,6 @@ export function packageFacts(content: string): {
     name: input.name,
     version: input.version,
     ...('exports' in input ? { exports: input.exports } : {}),
-    ...('peerDependencies' in input
-      ? { peerDependencies: input.peerDependencies }
-      : {}),
-    ...('peerDependenciesMeta' in input
-      ? { peerDependenciesMeta: input.peerDependenciesMeta }
-      : {}),
   };
 }
 export async function inspectMaintenance(
@@ -45,13 +37,12 @@ export async function inspectMaintenance(
 ): Promise<MaintenanceInventory> {
   const state = await readProject(projectDir);
   const components: MaintenanceComponent[] = [];
+  const recordedInstall = state.lock.outcomes.install;
   const installation =
-    state.lock.outcomes.install === 'completed' &&
-    (await installationHealthy(state.projectDir))
-      ? ('completed' as const)
-      : state.lock.outcomes.install === 'completed'
-        ? ('failed' as const)
-        : state.lock.outcomes.install;
+    recordedInstall === 'completed' &&
+    !(await installationHealthy(state.projectDir))
+      ? 'failed'
+      : recordedInstall;
   const warnings = [
     'Only curated components are inventoried; arbitrary custom code, private environments and deployed artifacts are outside this report.',
   ];
@@ -165,8 +156,6 @@ export async function inspectMaintenance(
       patchOwner: PATCH_OWNER,
     });
   }
-  if (canonical(state.config) !== canonical(state.lock.config))
-    warnings.push('Desired and realized state differ.');
   return {
     schemaVersion: 1,
     project: state.config.project.name,

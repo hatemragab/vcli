@@ -1,16 +1,28 @@
 import assert from 'node:assert/strict';
-import { test, before } from 'node:test';
-import { cp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { test, before, after } from 'node:test';
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { Module, type InjectionToken, type Type } from '@nestjs/common';
+import { NestFactory } from '@nestjs/core';
+import mongoose from 'mongoose';
 import ts from 'typescript';
 import type { ProjectConfig, RenderedFile } from '../src/contracts.js';
+import type { BootstrapBinding } from '../templates/runtime/common/src/core/bootstrap/bootstrap-bindings.ts';
+import { linkGeneratedDependencies } from './generated-dependencies.ts';
 
 type Renderer = typeof import('../src/recipes/render-mail.js');
-const fixture = resolve('var/cli-mail-integration');
+let fixture: string;
 let renderer: Renderer;
-class MailConsumerModule {}
 const tsc = resolve('node_modules/typescript/bin/tsc');
 function compile(config: string): void {
   const result = spawnSync(process.execPath, [tsc, '-p', config], {
@@ -18,23 +30,12 @@ function compile(config: string): void {
   });
   assert.equal(result.status, 0, result.stdout + result.stderr);
 }
-async function link(target: string, path: string): Promise<void> {
-  try {
-    await symlink(target, path, 'dir');
-  } catch (error: unknown) {
-    if (
-      !error ||
-      typeof error !== 'object' ||
-      !('code' in error) ||
-      error.code !== 'EEXIST'
-    )
-      throw error;
-  }
-}
 before(async () => {
+  await mkdir(resolve('var'), { recursive: true });
+  fixture = await mkdtemp(resolve('var/cli-mail-integration-'));
   const root = fixture + '/generator';
   await mkdir(root, { recursive: true });
-  await link(resolve('templates'), root + '/templates');
+  await symlink(resolve('templates'), root + '/templates', 'dir');
   await writeFile(root + '/package.json', JSON.stringify({ type: 'module' }));
   await writeFile(
     root + '/tsconfig.json',
@@ -54,6 +55,9 @@ before(async () => {
   renderer = (await import(
     pathToFileURL(root + '/dist/recipes/render-mail.js').href
   )) as Renderer;
+});
+after(async () => {
+  if (fixture) await rm(fixture, { recursive: true, force: true });
 });
 function config(
   mail?: 'capture' | 'smtp',
@@ -155,7 +159,7 @@ test('local immediate auth gets only the neutral participant while reliable outp
     );
     const module = content(files, 'src/modules/mail/mail.module.ts');
     assert.ok(module.includes('config.mailDelivery'));
-    assert.ok(module.includes('MailIntentService,useValue:intents'));
+    assert.ok(module.includes('intentsBinding.bind(intents)'));
     assert.ok(files.some((f) => f.path.endsWith('/initialize-mail.ts')));
   }
 });
@@ -244,7 +248,7 @@ type Sender = { submit(message: object): Promise<{ status: string }> };
 type Runtime = {
   sender: Sender;
   intents: undefined | { prepare(message: object, expiresAt: number): object };
-  module: unknown;
+  bindings: readonly BootstrapBinding[];
   close(): Promise<void>;
 };
 type RuntimeModule = {
@@ -254,16 +258,13 @@ type RuntimeModule = {
     dependencies?: { sender?: Sender },
   ): Runtime;
   createMailSender(config: object): Sender;
-  MailModule: { register(sender: Sender): unknown };
+  MailModule: Type<unknown>;
   createTestMailCapture?(maximum?: number): {
     sender: Sender;
     inspect(): unknown[];
   };
 };
-const instances = new Map<
-  string,
-  { root: string; module: RuntimeModule; config: object; sdk: string }
->();
+const instances = new Map<string, { module: RuntimeModule; config: object }>();
 for (const profile of profiles)
   test(`strict emitted mail compilation and Nest exports ${profile.name}`, async () => {
     const p = profile as Profile & {
@@ -281,12 +282,12 @@ for (const profile of profiles)
       'templates/runtime/common/src/core/errors/application-error.ts',
       root + '/src/core/errors/application-error.ts',
     );
-    const sdk = resolve(
-      'examples/reference-api' +
-        (p.database === 'mongodb' ? '' : '-postgres') +
-        '/node_modules',
+    await cp(
+      'templates/runtime/common/src/core/bootstrap',
+      root + '/src/core/bootstrap',
+      { recursive: true },
     );
-    await link(sdk, root + '/node_modules');
+    await linkGeneratedDependencies(root);
     await writeFile(root + '/package.json', JSON.stringify({ type: 'module' }));
     if (p.database)
       await cp(
@@ -372,9 +373,6 @@ for (const profile of profiles)
         /MAIL_DATABASE_REQUIRED/,
       );
       if (p.database === 'mongodb') {
-        const mongoose = (await import(
-          pathToFileURL(sdk + '/mongoose/index.js').href
-        )) as { createConnection(): { close(): Promise<void> } };
         connection = mongoose.createConnection();
         database = { connection }; // Disconnected native model constructor, no URL/network.
       } else database = {}; // PostgreSQL store constructor only records this controlled handle.
@@ -384,43 +382,36 @@ for (const profile of profiles)
       assert.equal(runtime.intents !== undefined, !!p.reliable);
       const { MailService } = (await import(
         pathToFileURL(root + '/dist/modules/mail/mail.service.js').href
-      )) as { MailService: unknown };
-      const { NestFactory } = (await import(
-        pathToFileURL(sdk + '/@nestjs/core/index.js').href
-      )) as {
-        NestFactory: {
-          createApplicationContext(
-            module: unknown,
-            options: object,
-          ): Promise<{ get(token: unknown): unknown; close(): Promise<void> }>;
-        };
-      };
-      const { Module } = (await import(
-        pathToFileURL(sdk + '/@nestjs/common/index.js').href
-      )) as {
-        Module(metadata: object): (target: typeof MailConsumerModule) => void;
-      };
-      Module({})(MailConsumerModule);
-      const inject: unknown[] = [MailService];
+      )) as { MailService: Type<unknown> };
+      const inject: InjectionToken[] = [MailService];
       if (p.reliable) {
         const { MailIntentService } = (await import(
           pathToFileURL(root + '/dist/modules/mail/mail-intent.service.js').href
-        )) as { MailIntentService: unknown };
+        )) as { MailIntentService: Type<unknown> };
         inject.push(MailIntentService);
       }
-      const context = await NestFactory.createApplicationContext(
-        {
-          module: MailConsumerModule,
-          imports: [runtime.module],
-          providers: [
-            {
-              provide: 'MAIL_CONSUMER',
-              inject,
-              useFactory: (...services: unknown[]) => services,
-            },
-          ],
-        },
-        { logger: false, abortOnError: false },
+      class MailConsumerModule {}
+      Module({
+        imports: [module.MailModule],
+        providers: [
+          {
+            provide: 'MAIL_CONSUMER',
+            inject,
+            useFactory: (...services: unknown[]) => services,
+          },
+        ],
+      })(MailConsumerModule);
+      const { withBootstrapBindings } = (await import(
+        pathToFileURL(root + '/dist/core/bootstrap/bootstrap-bindings.js').href
+      )) as Pick<
+        typeof import('../templates/runtime/common/src/core/bootstrap/bootstrap-bindings.ts'),
+        'withBootstrapBindings'
+      >;
+      const context = await withBootstrapBindings(runtime.bindings, () =>
+        NestFactory.createApplicationContext(MailConsumerModule, {
+          logger: false,
+          abortOnError: false,
+        }),
       );
       try {
         assert.deepEqual(context.get('MAIL_CONSUMER'), [
@@ -432,7 +423,7 @@ for (const profile of profiles)
           const { MailIntentService } = (await import(
             pathToFileURL(root + '/dist/modules/mail/mail-intent.service.js')
               .href
-          )) as { MailIntentService: unknown };
+          )) as { MailIntentService: Type<unknown> };
           assert.equal(context.get(MailIntentService), runtime.intents);
         }
       } finally {
@@ -494,7 +485,7 @@ for (const profile of profiles)
           ),
         /UNSAFE_PRODUCTION_CAPTURE/,
       );
-    instances.set(profile.name, { root, module, config: settings, sdk });
+    instances.set(profile.name, { module, config: settings });
   });
 
 test('generated SMTP runtime closes its sender without opening a network connection', async () => {
@@ -533,10 +524,7 @@ test('bounded drain command uses controlled peers, safe outcomes and finally cle
       },
     }).outputText,
   );
-  await link(
-    resolve('examples/reference-api-postgres/node_modules'),
-    root + '/node_modules',
-  );
+  await linkGeneratedDependencies(root);
   const trace =
     "import {appendFileSync} from 'node:fs';const record=(value)=>appendFileSync(process.env.MAIL_FIXTURE_TRACE,value+'\\n');";
   await writeFile(

@@ -7,7 +7,7 @@ export type Refresh = Readonly<{
   expiresAt: number;
   consumedAt: number | null;
 }>;
-export const sessionTable = pgTable('ref_sessions', {
+export const sessionTable = pgTable('sessions', {
   id: uuid('id').primaryKey(),
   accountId: uuid('account_id').notNull(),
   installationId: uuid('installation_id').notNull(),
@@ -22,7 +22,7 @@ export const sessionTable = pgTable('ref_sessions', {
   expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
   revokedAt: bigint('revoked_at', { mode: 'number' }),
 });
-export const refreshTable = pgTable('ref_refresh', {
+export const refreshTable = pgTable('refresh', {
   hash: text('hash').primaryKey(),
   sessionId: uuid('session_id').notNull(),
   expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),

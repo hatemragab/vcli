@@ -148,6 +148,32 @@ for (const database of ['mongodb', 'postgres'] as const) {
         );
         assert.deepEqual(missing, { code: 'NOTE_NOT_FOUND', status: 404 });
         assert.deepEqual(hidden, missing);
+        await assert.rejects(
+          service.editOwned(actor, foreignNote.id, { title: 'No' }),
+          missing!,
+        );
+        await assert.rejects(
+          service.removeOwned(actor, foreignNote.id),
+          missing!,
+        );
+        const editable = await service.createOwned(
+          actor,
+          { id: randomUUID(), title: 'Editable', body: '', createdAt },
+          randomUUID(),
+        );
+        const changed = await service.editOwned(actor, editable.note.id, {
+          body: 'Changed',
+        });
+        assert.deepEqual(changed, { ...editable.note, body: 'Changed' });
+        await service.removeOwned(actor, editable.note.id);
+        await assert.rejects(
+          service.getOwned(actor, editable.note.id),
+          missing!,
+        );
+        assert.equal(
+          (await service.getOwned(foreign, foreignNote.id)).title,
+          'Foreign only',
+        );
         for (const limit of [0, 101, 1.5])
           await assert.rejects(service.listOwned(actor, limit));
         for (const title of ['', ' ', 'a'.repeat(121), '📝'.repeat(61)])

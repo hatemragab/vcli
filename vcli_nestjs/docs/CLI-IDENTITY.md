@@ -1,4 +1,26 @@
-# Selected identity lifecycle contract
+# Selected identity contracts
+
+## Basic local authentication
+
+New projects initialized with `--auth local` use basic email/password auth. Add `--local-identifier username` to use usernames. The identifier is trimmed and normalized to lowercase. The selected MongoDB or PostgreSQL database stores accounts and Argon2id password hashes. Redis holds expiring register/login quota counters.
+
+MongoDB basic auth defines its account model in `src/modules/auth/auth.entity.ts` with a Mongoose schema. The schema owns the `basic_auth_accounts` collection name and unique identifier index. The initializer retains the existing `identity.basic` v1 database validation, so adopting the model preserves compatibility with an already-applied release.
+
+| Route                               | Request and result                                                                                                                                                                                           |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /api/identity/local/register` | Send `{ email, password }` or `{ username, password }`. Both first-time and duplicate registration return 202 with `{ status: 'accepted' }`. The existing password is preserved on duplicates.               |
+| `POST /api/identity/local/login`    | Send the same credential fields. A successful response is 200 with `{ accessToken, tokenType: 'Bearer', expiresAt }`, where `expiresAt` is Unix time in milliseconds. Invalid credentials return 401.        |
+| `GET /api/accounts/me`              | Send `Authorization: Bearer <accessToken>`. A successful response contains `id`, the selected `email` or `username`, and `createdAt` in Unix milliseconds. A missing, invalid, or expired token returns 401. |
+
+After registering, log in directly with the same credentials. An email entered during registration serves as a sign-in identifier and carries no verified-email claim. Explicitly selected mail serves application features independently of sign-in. Usernames contain 3–64 ASCII letters, digits, dots, underscores or hyphens, with a letter or digit first. Passwords preserve Unicode and must contain 12–128 UTF-16 code units within 256 UTF-8 bytes. Basic auth has no device enrollment, application session records, refresh tokens, or recovery routes. Sign in again after the access token expires.
+
+The local key ring is supplied through `JWT_KEYS_JSON` and `JWT_ACTIVE_KID`. `ACCESS_TTL_SECONDS` defaults to 3600 and accepts up to 86400. Fresh init writes a random development key to the gitignored, mode `0600` `.env.development`. Use separately generated production keys and a privately reachable `REDIS_URL` in production. [Auth rate limiting](#auth-rate-limiting) · [Stored profile choices](CLI-RECIPES.md)
+
+To protect a custom route, import `AuthModule` in your feature module and apply `AuthGuard` from `src/modules/auth/auth.guard.ts`. The guard attaches the account profile from the database to `request.authAccount`.
+
+## Full local auth and Firebase lifecycle
+
+Select `--local-auth-profile full` when creating a local-auth app that needs revocable sessions, device installations, or the full account lifecycle. Full local email auth also supports verification and password recovery with the selected mail provider. Existing installed local-auth projects keep their pinned profile. The lifecycle behavior below applies to full local auth and Firebase as indicated.
 
 The identity subsystem retains disabled/deleted account tombstones, identity subject keys, immutable capability hashes and revoked session/family records. Self deletion disables account access and clears the account email and password hashes atomically; it does not erase unrelated application data, audit records, backups or Firebase data before provider cleanup completes. Application owners must supply their own business-data retention/erasure procedure. Responses explicitly report `applicationCleanup: 'required'`, and provider cleanup is separately pending until acknowledged. No automatic retention purge or subject reuse is supported: keeping subject tombstones also fences delayed or unknown destructive provider calls from a replacement binding. Disable is irreversible through public self routes; operator recovery requires a separately reviewed process. This conservative policy is frozen before exposing self-action routes.
 
@@ -8,11 +30,23 @@ Installation possession is independent of session possession. Clients generate c
 
 Firebase clients generate `sessionCapability` once per intended application session and retain it across bootstrap retries and ID-token refresh. POST `/api/identity/firebase/bootstrap` accepts `{idToken, sessionCapability, installationCapability, allowRebind?, platform?}`. `X-Session-Token` carries the raw session capability privately on authenticated requests; the safe bootstrap response contains only sessionId, installationId, installationGeneration and expiresAt. A live capability recovers the same session despite old auth_time; a new capability requires recent auth_time and the durable account cutoff. Revoked, expired or rebound capabilities never reactivate. No `iat` freshness or email merge is used and no second JWT pair is issued.
 
+## Auth rate limiting
+
+Basic local, full local, and Firebase auth require `REDIS_URL` for expiring, shared rate-limit counters. Use a `redis://` or `rediss://` URL with a hostname. The generated private development file sets `REDIS_URL=redis://127.0.0.1:6379`. Supply a separate private value in production and point all replicas of the deployment to the same rate-limit endpoint. Full local auth and Firebase keep identity, installation, session and revocation state with the accounts in their selected database.
+
+`RedisIdentityRateStore` connects on the first rate-limited request. A single Lua operation charges all hashed request scopes and assigns a common fixed-minute expiry using Redis server time. It derives the Redis key namespace by hashing `auth.rateLimitNamespace`, which combines the canonical project name and `NODE_ENV`. An exceeded budget returns HTTP 429 (`RATE_LIMITED`). The connection and command share a one-second deadline. Redis errors and timeouts deny the affected operation with HTTP 503 (`IDENTITY_RATE_UNAVAILABLE`). After a timeout, a later request can open a fresh connection. Application shutdown closes the limiter. Check Redis reachability and a rate-limited operation separately from application readiness.
+
+For the full lifecycle, identity release owner version 4 keeps the `identity-v1` and `identity-lifecycle-v2` markers. Fresh schemas omit the old database rate-limit storage. Upgrades preserve existing records and the limiter leaves them unused.
+
+Native development verification on macOS used disposable Redis 6.2.7 with MongoDB and PostgreSQL in separate runs. Fresh username profiles passed `vcli init --offline --check` and `make first-run`, registered an account, shared its JWT session and a login quota across two API processes, and returned 503 on a rate-limited request after the Redis process stopped. For each database, a separate version 3 to version 4 schema release preserved an existing account, active session, and legacy rate-limit store while new requests used Redis.
+
 ## Generator and composition contract
 
-`src/recipes/render-identity.ts` emits the selected identity module, owner source, common `src/core/auth/{auth-runtime-error,password-input,session-record}.ts` helpers, native cleanup types, selected client and identity schema assets. Root renderers retain configuration, package distribution, application composition and the combined schema entrypoint; identityFiles does not emit `src/initialize-database.ts`. Native schemas remain separate, never runtime-switched. initializeIdentityDatabase explicitly applies PostgreSQL001 then002, or Mongo base collections/indexes then all three owner lifecycle contributions. Ordinary boot validates both markers and never applies migrations.
+This section covers the full local and Firebase generators.
 
-`new JoseAccessTokens(policy: JwtPolicy)` takes the exact auth-runtime policy. Private `JWT_KEYS_JSON` is a strict JSON array of 1–4 `{ "id": "rotation-id", "key": "canonical-base64url-of-32-random-bytes" }` entries; no other keys. Decode canonical base64url into Uint8Array, never UTF8 key text. `JWT_ACTIVE_KID` selects an explicit entry. Existing JWT_ISSUER/JWT_AUDIENCE map directly; `JWT_MAX_LIFETIME_SECONDS` maps to maxLifetimeSeconds (1–86400, default900) and `JWT_MAX_FUTURE_ISSUED_SECONDS` to maxFutureIssuedSeconds (0–60, default0). Require access TTL <= maximum lifetime. Runtime snapshots keys; replacing config requires replacing the wrapper. Existing `JWT_SECRET` is superseded. Examples contain blank keys only. Firebase opaque mode needs neither this config nor JOSE/Argon peers.
+`src/recipes/render-identity.ts` emits the selected identity module, owner source, common `src/core/auth/{auth-runtime-error,password-input,session-record}.ts` helpers, selected client and native schema assets. Firebase selects provider cleanup code and storage. Local email authentication selects action-token persistence for verification and password recovery. Root renderers retain configuration, package distribution, application composition and the combined schema entrypoint. `initializeIdentityDatabase` explicitly applies PostgreSQL 001 then 002, or Mongo base collections and indexes followed by all three owner lifecycle contributions. Ordinary boot validates both native markers.
+
+`new JoseAccessTokens(policy: JwtPolicy)` takes the exact auth-runtime policy. Private `JWT_KEYS_JSON` is a strict JSON array of 1–4 `{ "id": "rotation-id", "key": "canonical-base64url-of-32-random-bytes" }` entries; no other keys. Decode canonical base64url into Uint8Array, never UTF8 key text. `JWT_ACTIVE_KID` selects an explicit entry. Existing JWT_ISSUER/JWT_AUDIENCE map directly; `JWT_MAX_LIFETIME_SECONDS` maps to maxLifetimeSeconds (1–86400, default900) and `JWT_MAX_FUTURE_ISSUED_SECONDS` to maxFutureIssuedSeconds (0–60, default0). Require access TTL <= maximum lifetime. Runtime snapshots keys; replacing config requires replacing the wrapper. Existing `JWT_SECRET` is superseded. Fresh local-auth projects generate a key in the gitignored, mode `0600` `.env.development`. Production operators supply their own key rings and active key IDs. Firebase opaque mode needs neither this config nor JOSE/Argon peers.
 
 `await ArgonPasswords.create(policy?: Partial<PasswordPolicy>)` shares one bounded runtime across hashing, verification and dummy verification. The application enforces exactly 12–128 UTF16 units, <=256 UTF8 bytes, well-formed Unicode, without normalization/truncation. maxPasswordBytes is fixed256 by the wrapper. Passwords now exposes verifyDummy(password):Promise<void>, replacing public dummyHash. The wrapper maps fixed runtime codes through safe ApplicationError. Native credentialVersion, proof consumption and transactional policy remain application-owned.
 
@@ -36,11 +70,33 @@ Client assets are `clients/auth-local.mjs` and `clients/auth-firebase.mjs`. Loca
 
 Application code must recheck the current principal's exact installation generation before delayed disclosure or effects. A bearer guard cannot retract bytes already sent or an external effect already accepted; atomic application writes should validate current authority in their own explicit transaction. Push and realtime owners consume the neutral Principal generation fact rather than importing identity models.
 
-For a protected route in a custom feature, explicitly pass `capabilities.auth` from `AppCustomModule.register` into that feature's Nest module imports. The configured identity module exports the existing `HttpSecurityModule`, so the feature can use `PrincipalGuard` and `CurrentPrincipal` with the selected authority.
+For a protected route in a custom feature, import `IdentityModule` in that feature's Nest module. `IdentityModule` exports `HttpSecurityModule`, so the feature can use `PrincipalGuard` and `CurrentPrincipal` with the selected authority.
+
+### Signed-in devices
+
+Full local and Firebase profiles expose `GET /api/sessions/devices`. It groups active sessions by the account's current installation bindings. Each device includes its installation ID and generation, platform, platform-derived label, installation creation time, latest active session sign-in time, session count, and whether it is the caller's device. The response includes a limit of 100 and orders the current device first, then most recent sign-in. Platform comes from client registration. The projection omits session credentials, possession hashes, and push tokens.
+
+To sign out one device, send `POST /api/sessions/revoke` with `{"scope":"installation","installationId":"<owned UUID>"}` using a recently authenticated session. The server revokes every active session for that installation's current generation in one transaction. Missing, foreign, and already signed-out devices return the same `404 INSTALLATION_NOT_FOUND`. Sibling installations remain signed in. Existing session and push authority checks fence the revoked sessions. The installation ID remains available for a future fresh sign-in, and Firebase proofs dated on or before a target installation's revocation cannot open a new session there.
+
+## Link a Firebase project
+
+Run the pinned setup command from a generated project with Firebase Auth or FCM selected. The official Firebase CLI must be available on `PATH`. Setup can prompt for Firebase login when run interactively. For automation, sign in to the Firebase CLI first and pass an explicit project ID.
+
+```sh
+npm exec -- vcli firebase setup
+npm exec -- vcli firebase setup --existing my-firebase-dev
+npm exec -- vcli firebase setup --create my-new-firebase-dev
+```
+
+Download the Admin SDK service-account key from **Project settings → Service accounts** in Firebase and save it as `firebase-admin.json` in the app root. When a new project has no key yet, setup records the project ID and reports `pending`. Save the key and rerun setup. Running `--create` again with the same accessible project ID reuses that project. Newly generated projects ignore `/firebase-admin.json` in Git. For an older checkout, add this line to its `.gitignore` before saving the key.
+
+Setup writes `FIREBASE_PROJECT_ID` and `GOOGLE_APPLICATION_CREDENTIALS=./firebase-admin.json` for Auth. For FCM, it writes `FCM_PROJECT_ID` and `FCM_CREDENTIALS_PATH=./firebase-admin.json`. If both are selected, setup links both by default. Pass `--for auth` or `--for fcm` for one capability. With `--adc`, setup leaves credential settings untouched and writes the selected project ID. Supply runtime credentials through Application Default Credentials or an existing configured path. Setup preserves unrelated `.env.development` settings and refuses to replace an existing project ID.
+
+Use `--dry-run` to see the affected settings before accessing Firebase or reading the key. Run `npm exec -- vcli config check --config-file .env.development` to validate local configuration. Enable the Auth methods selected by the app and verify sign-in or push delivery separately. [Firebase CLI reference](https://firebase.google.com/docs/cli) · [Firebase Admin SDK setup](https://firebase.google.com/docs/admin/setup)
 
 ## Client setup and private storage
 
-For local auth, construct `LocalAuthClient({origin,store,locks,lockName})` after providing a private asynchronous store with read/write and a mutex shared by every client instance/tab using that store. Browser Web Locks is the default mutex; unsupported hosts must supply an equivalent. Store device possession separately from the rotating refresh session. Select a distinct lockName for each independent session store. Registration does not log in; the email-proof holder chooses a new password at confirmation, then explicitly logs in. Reset and password change invalidate old families. Never retry an ambiguous refresh, and never share one family across tabs without the shared mutex/store. The example supplies safe session lists, all four revoke scopes, fresh self actions and installation rotation. Non-current session scopes require recent application-session authentication; use an independent fresh login when the existing enrollment is old.
+For full local auth, construct `LocalAuthClient({origin,store,locks,lockName})` after providing a private asynchronous store with read/write and a mutex shared by every client instance/tab using that store. Browser Web Locks is the default mutex; unsupported hosts must supply an equivalent. Store device possession separately from the rotating refresh session. Select a distinct lockName for each independent session store. In full email auth, the email-proof holder chooses a new password at confirmation, then explicitly logs in. Reset and password change invalidate old families. Never retry an ambiguous refresh, and never share one family across tabs without the shared mutex/store. The example supplies safe session lists, all four revoke scopes, fresh self actions and installation rotation. Non-current session scopes require recent application-session authentication; use an independent fresh login when the existing enrollment is old.
 
 For Firebase, pass the real modular client SDK exports, configured Auth, API origin and one private enrollment store per intended app session to `FirebaseAuthClient`. Do not point multiple independent tabs at the same enrollment store. They may use the same Firebase project/user and still enroll separate independently revocable API sessions. Backend identity Firebase project/ADC is separate from optional FCM project/credentials. Enable only selected methods and configure each external method:
 
@@ -55,7 +111,17 @@ Generate installation possession once with createPrivateCapability(), retain it 
 
 Firebase provider linking uses real SDK linkWithCredential or linkWithPopup plus a UI-supplied reauthentication callback, then syncs verified provider facts with the backend. Google/Apple popup linking passes the corresponding configured provider; email/password uses EmailAuthProvider.credential, and phone uses the actual confirmed phone credential. Unlink asks the backend first so last-method and durable-intent policy is enforced before Admin cleanup. Provider-managed actions/handlers use selected `mail-firebase-actions.mjs`; application delivery uses this client's explicitly named application request methods only when that mode was selected. Both handlers stay on Firebase SDK action-code APIs and validate configured continuations through M's asset. No Firebase emulator/provider fake is a production client flow.
 
-## Runtime worker verification and remaining acceptance
+## Redis limiter and native identity verification
+
+`test/auth-lifecycle-native.test.ts` runs the Redis limiter case when `VCLI_IDENTITY_REDIS_TEST_URL` points at a disposable Redis instance. It checks concurrent charging across scopes, common expiry, project and environment isolation, and a shared quota across separate Node processes. The synthetic lifecycle suite uses a controlled Redis peer to exercise stalled connection and command handling, reconnect and shutdown.
+
+`scripts/verify-native-capabilities.ts` also accepts this private URL for its identity suite and redacts it from evidence. Generated diagnostics retain the stable `IDENTITY_RATE_UNAVAILABLE` code when Redis requests fail.
+
+The focused Redis 6.2.7 and synthetic lifecycle run passed 20 tests with zero failures. Four database cases were skipped because their native database settings were absent. Those cases use prepared schemas and run with `VCLI_IDENTITY_MONGODB_TEST_URL` or `VCLI_IDENTITY_POSTGRES_TEST_URL`, or `TEST_DATABASE_URL` paired with `VCLI_IDENTITY_TEST_DATABASE`. Live Firebase sign-in and deployed ingress require their own verification.
+
+## Historical native-limiter verification and remaining acceptance
+
+The following runs used the earlier database-backed auth limiter. See the current Redis contract above for configuration and runtime behavior.
 
 Worker checks reuse existing installed tools and SDK caches, with source/output exclusively under ignored `var/cli-identity-lifecycle/`. The fixture compiles current common plus selected native owner services at ES2023, with a minimal test-only config/DI token declaration. It is isolated compilation, not generated composition, packed installation or HTTP acceptance. Synthetic tests replace persistence/provider boundaries explicitly and check real application service behavior; actual Argon/JOSE wrappers use the installed reviewed auth-runtime. Client tests inject controlled SDK/fetch/store/mutex peers without any external network.
 

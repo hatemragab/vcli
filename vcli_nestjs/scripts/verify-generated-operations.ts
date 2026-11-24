@@ -12,7 +12,15 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
+import {
+  clearGeneratedRedisRates,
+  generatedRedisRatePrefix,
+  redactGeneratedRedisOutput,
+  requireGeneratedRedisTestUrl,
+  withGeneratedRedisClient,
+} from './generated-redis-fixture.ts';
 
 const nodeDigest =
   'node@sha256:18a166e2d50578afe933434857ed2d9059bd1aa398a223e9c89eb4302354f079';
@@ -124,6 +132,15 @@ function text(value: unknown): string {
 
 /** Real isolated acceptance. No task resource is discovered or deleted by a broad name/cache scan. */
 export async function verifyGeneratedOperations(): Promise<void> {
+  const hostRedisUrl = requireGeneratedRedisTestUrl(process.env);
+  const containerRedisUrl =
+    process.env.VCLI_GENERATED_REDIS_CONTAINER_TEST_URL === undefined
+      ? hostRedisUrl
+      : requireGeneratedRedisTestUrl(
+          process.env,
+          'VCLI_GENERATED_REDIS_CONTAINER_TEST_URL',
+        );
+  const redisUrls = [hostRedisUrl, containerRedisUrl];
   const repository = resolve('.'),
     evidence = join(repository, 'var/cli-evidence/operations');
   await mkdir(evidence, { recursive: true, mode: 0o700 });
@@ -138,13 +155,14 @@ export async function verifyGeneratedOperations(): Promise<void> {
   } catch {
     // No saved task state means a fresh isolated gate.
   }
+  if (saved && saved.redisFixtureVersion !== 1)
+    throw new Error('OPERATIONS_REDIS_FIXTURE_VERSION_MISMATCH');
   const suffix = saved ? text(saved.suffix) : randomBytes(5).toString('hex'),
     name = 'operations-' + suffix,
     image = 'vcli-operations-' + suffix;
   const project = join(workspace, 'app'),
     pack = join(workspace, 'pack'),
-    tool = join(workspace, 'tool'),
-    runtimeFile = join(workspace, 'runtime.env');
+    tool = join(workspace, 'tool');
   const privateValues: string[] = [];
   const records: {
     name: string;
@@ -171,12 +189,27 @@ export async function verifyGeneratedOperations(): Promise<void> {
   const containers = new Set<string>();
   const volumes = new Set<string>();
   let dev: ChildProcess | undefined;
+  let devClosed: Promise<number | null> | undefined;
+  let rateApiContainer: string | undefined;
+  let privateConfigDirectory: string | undefined;
+  let redisCleanupNeeded = false;
+  let redisCleanupFailed = false;
   let success = false;
   let sentinel: ReturnType<typeof createServer> | undefined;
+  function safeOutput(input: string): string {
+    return redactOperationOutput(
+      redactGeneratedRedisOutput(input, redisUrls),
+      privateValues,
+    );
+  }
   async function save(): Promise<void> {
     await writeFile(
       stateFile,
-      JSON.stringify({ suffix, records, facts }, null, 2),
+      JSON.stringify(
+        { suffix, records, facts, redisFixtureVersion: 1 },
+        null,
+        2,
+      ),
       { mode: 0o600 },
     );
     await writeFile(
@@ -250,11 +283,9 @@ export async function verifyGeneratedOperations(): Promise<void> {
       exitCode: result.status,
       elapsedMs: Date.now() - start,
     });
-    await writeFile(
-      join(evidence, label + '.log'),
-      redactOperationOutput(result.output, privateValues),
-      { mode: 0o600 },
-    );
+    await writeFile(join(evidence, label + '.log'), safeOutput(result.output), {
+      mode: 0o600,
+    });
     await save();
     process.stdout.write(
       label + ': ' + (result.status === expected ? 'passed' : 'FAILED') + '\n',
@@ -427,6 +458,8 @@ export async function verifyGeneratedOperations(): Promise<void> {
           'postgres',
           '--auth',
           'local',
+          '--local-auth-profile',
+          'full',
           '--mail',
           'smtp',
           '--storage',
@@ -752,7 +785,7 @@ export async function verifyGeneratedOperations(): Promise<void> {
         ),
       );
       assert.equal(config.User, 'node');
-      for (const value of privateValues)
+      for (const value of [...privateValues, ...redisUrls])
         assert.equal(JSON.stringify(config).includes(value), false);
       const audit = docker([
         'run',
@@ -783,7 +816,7 @@ export async function verifyGeneratedOperations(): Promise<void> {
         '{{.CreatedBy}}',
         image,
       ]);
-      for (const value of privateValues)
+      for (const value of [...privateValues, ...redisUrls])
         assert.equal(history.includes(value), false);
       facts.imageHistorySha256 = createHash('sha256')
         .update(history)
@@ -806,6 +839,7 @@ export async function verifyGeneratedOperations(): Promise<void> {
       PUBLIC_ORIGIN: 'https://operations.example.invalid',
       ALLOWED_ORIGINS: 'http://127.0.0.1:3100',
       DATABASE_URL: databaseUrl,
+      REDIS_URL: containerRedisUrl,
       JWT_KEYS_JSON: JSON.stringify([{ id: 'ops1', key: secrets.jwt }]),
       JWT_ACTIVE_KID: 'ops1',
       SMTP_HOST: '127.0.0.1',
@@ -814,12 +848,15 @@ export async function verifyGeneratedOperations(): Promise<void> {
       LOCAL_STORAGE_ROOT: '/app/var/storage',
       OPERATION_FIXTURE_PASSWORD: secrets.password!,
     };
+    const configDirectory = await mkdtemp(join(workspace, 'runtime-config-'));
+    privateConfigDirectory = configDirectory;
+    const runtimeFile = join(configDirectory, 'runtime.env');
     await writeFile(
       runtimeFile,
       Object.entries(runtime)
         .map(([key, value]) => key + '=' + value)
         .join('\n') + '\n',
-      { mode: 0o600 },
+      { mode: 0o600, flag: 'wx' },
     );
     const baseRun = [
       'run',
@@ -835,9 +872,66 @@ export async function verifyGeneratedOperations(): Promise<void> {
       '1',
       '--pids-limit',
       '256',
-      '--config-file',
+      '--env-file',
       runtimeFile,
     ];
+    redisCleanupNeeded = true;
+    await clearGeneratedRedisRates(hostRedisUrl, name, 'production');
+    await clearGeneratedRedisRates(hostRedisUrl, name, 'development');
+    const probeKey =
+      generatedRedisRatePrefix(name, 'production') +
+      'operations-probe:' +
+      randomBytes(16).toString('hex');
+    const probeValue = randomBytes(16).toString('hex');
+    await withGeneratedRedisClient(hostRedisUrl, async (client) => {
+      assert.equal(
+        await client.set(probeKey, probeValue, { NX: true, PX: 60_000 }),
+        'OK',
+      );
+    });
+    const probe = `import { createClient } from '@redis/client';
+const client = createClient({ url: process.env.REDIS_URL, RESP: 2, disableClientInfo: true, disableOfflineQueue: true, socket: { connectTimeout: 5000, reconnectStrategy: false } });
+client.on('error', () => {});
+const timer = setTimeout(() => { if (client.isOpen) client.destroy(); }, 5000);
+try {
+  await client.connect();
+  const value = await client.get(${JSON.stringify(probeKey)});
+  if (value !== ${JSON.stringify(probeValue)}) throw new Error('Redis fixture mismatch');
+  process.stdout.write('SHARED_REDIS_FIXTURE');
+} catch {
+  process.stderr.write('Container REDIS_URL did not reach the host fixture database');
+  process.exitCode = 1;
+} finally {
+  clearTimeout(timer);
+  if (client.isOpen) client.destroy();
+}`;
+    try {
+      assert.equal(
+        await run(
+          'image-redis-shared-fixture',
+          'sudo',
+          [
+            '-n',
+            'docker',
+            ...baseRun,
+            '-i',
+            image,
+            'node',
+            '--input-type=module',
+          ],
+          project,
+          {},
+          20_000,
+          0,
+          probe,
+        ),
+        'SHARED_REDIS_FIXTURE',
+      );
+    } finally {
+      await withGeneratedRedisClient(hostRedisUrl, async (client) => {
+        await client.del(probeKey);
+      });
+    }
     await run(
       'image-explicit-release',
       'sudo',
@@ -851,7 +945,7 @@ export async function verifyGeneratedOperations(): Promise<void> {
       ],
       project,
     );
-    const seed = `import {ArgonPasswords} from './dist/modules/identity/argon-passwords.service.js';import pg from 'pg';import {randomUUID} from 'node:crypto';const p=await ArgonPasswords.create();const pool=new pg.Pool({connectionString:process.env.DATABASE_URL});const email='operations@example.invalid',hash=await p.hash(process.env.OPERATION_FIXTURE_PASSWORD);try{const old=await pool.query('SELECT id FROM ref_accounts WHERE email=$1',[email]);if(!old.rowCount){const id=randomUUID();await pool.query('INSERT INTO ref_accounts(id,email,email_verified,enabled,created_at) VALUES($1,$2,true,true,$3)',[id,email,Date.now()]);await pool.query('INSERT INTO ref_identities(key,account_id,password_hash,credential_version,enrollment_cutoff,generation,active,methods,cleanup_pending) VALUES($1,$2,$3,1,0,1,true,$4,false)',['local:'+email,id,hash,JSON.stringify(['password'])]);}console.log('REAL_ARGON_SEED_COMPLETE');}finally{await pool.end();}`;
+    const seed = `import {ArgonPasswords} from './dist/modules/identity/argon-passwords.service.js';import pg from 'pg';import {randomUUID} from 'node:crypto';const p=await ArgonPasswords.create();const pool=new pg.Pool({connectionString:process.env.DATABASE_URL});const email='operations@example.invalid',hash=await p.hash(process.env.OPERATION_FIXTURE_PASSWORD);try{const old=await pool.query('SELECT id FROM accounts WHERE email=$1',[email]);if(!old.rowCount){const id=randomUUID();await pool.query('INSERT INTO accounts(id,email,email_verified,enabled,created_at) VALUES($1,$2,true,true,$3)',[id,email,Date.now()]);await pool.query('INSERT INTO identities(key,account_id,password_hash,credential_version,enrollment_cutoff,generation,active,methods,cleanup_pending) VALUES($1,$2,$3,1,0,1,true,$4,false)',['local:'+email,id,hash,JSON.stringify(['password'])]);}console.log('REAL_ARGON_SEED_COMPLETE');}finally{await pool.end();}`;
     await run(
       'image-native-argon-seed',
       'sudo',
@@ -890,13 +984,14 @@ export async function verifyGeneratedOperations(): Promise<void> {
       '1',
       '--pids-limit',
       '256',
-      '--config-file',
+      '--env-file',
       runtimeFile,
       '--mount',
       'type=volume,src=' + storage + ',dst=/app/var/storage',
       image,
     ]);
     containers.add(api);
+    rateApiContainer = api;
     const ip = docker([
         'inspect',
         '--format',
@@ -1000,6 +1095,7 @@ export async function verifyGeneratedOperations(): Promise<void> {
     docker(['stop', '--time', '10', api]);
     docker(['rm', api]);
     containers.delete(api);
+    rateApiContainer = undefined;
     await check('actual-dev-owned-shutdown-and-json-refusal', async () => {
       const port = await availablePort();
       sentinel = createServer((_request, response) => {
@@ -1009,10 +1105,11 @@ export async function verifyGeneratedOperations(): Promise<void> {
       const address = sentinel.address();
       assert.ok(address && typeof address !== 'string');
       const sentinelOrigin = 'http://127.0.0.1:' + address.port;
-      const devFile = join(workspace, 'development.env');
+      const devFile = join(configDirectory, 'development.env');
       const devEnv = {
         ...runtime,
         NODE_ENV: 'development',
+        REDIS_URL: hostRedisUrl,
         LOCAL_STORAGE_ROOT: join(workspace, 'dev-storage'),
       };
       await writeFile(
@@ -1020,7 +1117,7 @@ export async function verifyGeneratedOperations(): Promise<void> {
         Object.entries(devEnv)
           .map(([key, value]) => key + '=' + value)
           .join('\n') + '\n',
-        { mode: 0o600 },
+        { mode: 0o600, flag: 'wx' },
       );
       await cli(
         'dev-json-refusal',
@@ -1054,6 +1151,7 @@ export async function verifyGeneratedOperations(): Promise<void> {
       const closed = new Promise<number | null>((done) =>
         dev!.once('close', (code) => done(code)),
       );
+      devClosed = closed;
       await waitFor(
         async () => {
           try {
@@ -1069,18 +1167,32 @@ export async function verifyGeneratedOperations(): Promise<void> {
         'DEV_READINESS',
         90000,
       );
+      const login = await fetch(
+        'http://127.0.0.1:' + port + '/api/identity/local/login',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: 'operations@example.invalid',
+            password: secrets.password,
+            installationCapability: randomBytes(32).toString('base64url'),
+            platform: 'web',
+          }),
+          signal: AbortSignal.timeout(10_000),
+        },
+      );
+      await login.body?.cancel();
+      assert.equal(login.status, 200, 'DEV_REDIS_AUTH_LOGIN');
       dev.kill('SIGTERM');
       const code = await Promise.race([
         closed,
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('DEV_SHUTDOWN_TIMEOUT')), 15000),
-        ),
+        delay(15_000, undefined, { ref: false }).then(() => {
+          throw new Error('DEV_SHUTDOWN_TIMEOUT');
+        }),
       ]);
-      await writeFile(
-        join(evidence, 'actual-dev.log'),
-        redactOperationOutput(output, privateValues),
-        { mode: 0o600 },
-      );
+      await writeFile(join(evidence, 'actual-dev.log'), safeOutput(output), {
+        mode: 0o600,
+      });
       assert.ok(code === 0 || code === 143, 'DEV_EXIT');
       await waitFor(async () => {
         try {
@@ -1099,6 +1211,7 @@ export async function verifyGeneratedOperations(): Promise<void> {
       dev = undefined;
       facts.dev = {
         ready: true,
+        redisAuthLogin: true,
         exitCode: code,
         sentinelSurvived: true,
         portReleased: true,
@@ -1106,13 +1219,11 @@ export async function verifyGeneratedOperations(): Promise<void> {
     });
     await databaseDown('development');
     success = true;
-    await save();
   } catch (error) {
     await writeFile(
       join(evidence, 'failure.log'),
-      redactOperationOutput(
+      safeOutput(
         error instanceof Error ? (error.stack ?? error.message) : String(error),
-        privateValues,
       ),
       { mode: 0o600 },
     );
@@ -1122,20 +1233,23 @@ export async function verifyGeneratedOperations(): Promise<void> {
       {
         // eslint-disable-next-line preserve-caught-error -- Provider errors can echo runtime credentials; evidence and cause retain only sanitized text.
         cause: new Error(
-          redactOperationOutput(
-            error instanceof Error ? error.message : String(error),
-            privateValues,
-          ),
+          safeOutput(error instanceof Error ? error.message : String(error)),
         ),
       },
     );
   } finally {
+    let devStopped = !dev;
     if (dev?.pid) {
       try {
         dev.kill('SIGTERM');
       } catch {
         // The task-owned CLI may already have stopped.
       }
+      if (devClosed)
+        devStopped = await Promise.race([
+          devClosed.then(() => true),
+          delay(15_000, false, { ref: false }),
+        ]);
     }
     if (sentinel)
       await new Promise<void>((done) => sentinel!.close(() => done()));
@@ -1146,8 +1260,41 @@ export async function verifyGeneratedOperations(): Promise<void> {
       );
       if (labels && (labels.includes(suffix) || labels.includes(name))) {
         docker(['stop', '--time', '5', id], false);
-        docker(['rm', id], false);
+        const removed = docker(['rm', id], false);
+        if (id === rateApiContainer && removed) rateApiContainer = undefined;
       }
+    }
+    if (privateConfigDirectory)
+      await rm(privateConfigDirectory, { recursive: true, force: true });
+    if (redisCleanupNeeded) {
+      const started = Date.now();
+      const cleanup =
+        devStopped && !rateApiContainer
+          ? await Promise.allSettled([
+              clearGeneratedRedisRates(hostRedisUrl, name, 'production'),
+              clearGeneratedRedisRates(hostRedisUrl, name, 'development'),
+            ])
+          : [];
+      const cleaned =
+        cleanup.length === 2 &&
+        cleanup.every((result) => result.status === 'fulfilled');
+      records.push({
+        name: 'redis-rate-fixture-cleanup',
+        exitCode: cleaned ? 0 : 1,
+        elapsedMs: Date.now() - started,
+      });
+      if (!cleaned) {
+        redisCleanupFailed = true;
+        success = false;
+        await writeFile(
+          join(evidence, 'redis-rate-fixture-cleanup.log'),
+          cleanup.length
+            ? 'Could not clear the generated project rate namespaces.'
+            : 'An owned API process could not be confirmed stopped.',
+          { mode: 0o600 },
+        );
+      }
+      await save();
     }
     if (success) {
       for (const volume of volumes) {
@@ -1166,6 +1313,8 @@ export async function verifyGeneratedOperations(): Promise<void> {
       await rm(workspace, { recursive: true });
     }
   }
+  if (redisCleanupFailed)
+    throw new Error('GENERATED_OPERATIONS_REDIS_CLEANUP_FAILED');
 }
 if (
   process.argv[1] &&

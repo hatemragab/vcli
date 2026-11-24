@@ -14,6 +14,7 @@ import {
   summarizePlan,
 } from '../engine/index.js';
 import type { GenerationPlan } from '../engine/types.js';
+import { validateAuthCompatibility } from '../recipes/selection.js';
 import type { CommandResult } from './command-output.js';
 import { CliError } from './cli-error.js';
 import { packageRunner } from './package-runner.js';
@@ -41,6 +42,8 @@ export async function initWorkflow(
 ): Promise<CommandResult> {
   let target = directory;
   const choices = { ...options };
+  const selectedWith = (family: string) =>
+    choices.with?.some((id) => id.startsWith(`${family}.`));
   if (interactive && !choices.yes && !choices.name) {
     const suggested = target ? basename(resolve(target)) : 'example-api';
     choices.name = await input({
@@ -62,7 +65,12 @@ export async function initWorkflow(
   target ??= choices.name;
   if (!target)
     throw new CliError('MISSING_INPUT', 'Supply a project directory.');
-  if (!choices.database && interactive && !choices.yes) {
+  if (
+    !choices.database &&
+    !selectedWith('database') &&
+    interactive &&
+    !choices.yes
+  ) {
     const database = await select({
       message: 'Database selected for this project',
       choices: [
@@ -75,7 +83,13 @@ export async function initWorkflow(
     });
     if (database !== 'none') choices.database = database;
   }
-  if (!choices.auth && choices.database && interactive && !choices.yes) {
+  if (
+    !choices.auth &&
+    !selectedWith('auth') &&
+    (choices.database || selectedWith('database')) &&
+    interactive &&
+    !choices.yes
+  ) {
     const auth = await select({
       message: 'Authentication',
       choices: [
@@ -84,7 +98,7 @@ export async function initWorkflow(
           : [{ name: 'No authentication', value: 'none' }]),
         { name: 'Local email/password + JWT', value: 'local' },
         {
-          name: 'Local username/password + JWT (no email or recovery)',
+          name: 'Local username/password + JWT',
           value: 'local-username',
         },
         {
@@ -95,8 +109,22 @@ export async function initWorkflow(
     });
     if (auth === 'local-username') {
       choices.auth = 'local';
-      choices.localIdentifier = 'username';
+      choices.localIdentifier ??= 'username';
     } else if (auth !== 'none') choices.auth = auth;
+    if (choices.auth === 'local' && choices.localAuthProfile === undefined)
+      choices.localAuthProfile = await select({
+        message: 'Local authentication profile',
+        choices: [
+          {
+            name: 'Basic — register, log in, and read account',
+            value: 'basic',
+          },
+          {
+            name: 'Full — revocable sessions and account actions',
+            value: 'full',
+          },
+        ],
+      });
   }
   if (choices.preset && !['minimal', 'api'].includes(choices.preset))
     throw new CliError(
@@ -104,23 +132,30 @@ export async function initWorkflow(
       'Choose minimal or api; the api preset requires an explicit database.',
     );
   if (choices.preset === 'api') {
-    if (!choices.database)
+    if (!choices.database && !selectedWith('database'))
       throw new CliError(
         'MISSING_CAPABILITY',
         'Select --database mongodb or postgres for the api preset.',
       );
-    choices.auth ??= 'local';
-    choices.storage ??= 'local';
-    choices.realtime ??= 'socket-io';
-    choices.media = true;
-    choices.notes = true;
+    if (!selectedWith('auth')) choices.auth ??= 'local';
+    if (!selectedWith('storage')) choices.storage ??= 'local';
     choices.diagnostics = true;
   }
+  const localAuth =
+    choices.auth === 'local' || choices.with?.includes('auth.local');
+  if (localAuth) choices.localAuthProfile ??= 'basic';
+  const basicAuth = localAuth && choices.localAuthProfile === 'basic';
+  if (choices.preset === 'api' && !basicAuth) {
+    if (!selectedWith('realtime')) choices.realtime ??= 'socket-io';
+    choices.media = true;
+    choices.notes = true;
+  }
   if (
-    choices.auth === 'local' &&
+    localAuth &&
+    choices.localAuthProfile === 'full' &&
     choices.localIdentifier !== 'username' &&
     !choices.mail &&
-    !choices.with?.some((id) => id.startsWith('mail.'))
+    !selectedWith('mail')
   ) {
     if (interactive && !choices.yes)
       choices.mail = await select({
@@ -150,6 +185,7 @@ export async function initWorkflow(
       ...selectRecipes(catalog, choices),
     },
   };
+  validateAuthCompatibility(config);
   const plan = await planInit({
     workspaceDir: process.cwd(),
     projectDir: resolve(target),

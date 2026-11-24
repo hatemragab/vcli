@@ -1,12 +1,20 @@
 # VCLI contributor and coding-agent instructions
 
-This is the standalone VCLI NestJS package in the VCLI workspace. It is not the SuperUp backend. The delivery contains planning documentation and owner-reviewed hand-built single-database reference applications under `examples/`. The owner has now authorized CLI implementation through all documented phases; keep generated-app evidence separate from reference evidence. Read [START-HERE.md](START-HERE.md), [the architecture](docs/ARCHITECTURE.md), [the decisions](docs/DECISIONS.md), and the selected phase before work. The reference is an expected-output review surface; keep its evidence separate from generator phase completion.
+VCLI is a standalone TypeScript CLI that generates and maintains NestJS applications. Start with the [task-to-file map](START-HERE.md) for the implementation and focused checks. Consult [the architecture](docs/ARCHITECTURE.md), [the decisions](docs/DECISIONS.md), and the relevant capability guide for design and acceptance requirements. Generator acceptance requires evidence from a generated project.
+
+## Working in the generator checkout
+
+- [src/cli.ts](src/cli.ts) registers the command groups in [src/commands/](src/commands/). For a change to generated output, start in [src/recipes/](src/recipes/) and [templates/runtime/](templates/runtime/). Planning, safe writes, and recovery live in [src/engine/](src/engine/).
+- Edit the shared authentication runtime in [packages/auth-runtime/](packages/auth-runtime/). The build creates its distribution copy under `runtime-packages/auth-runtime/`.
+- Use the Node range and npm version in [package.json](package.json). On a fresh checkout, install from the lockfile with `npm ci --ignore-scripts --no-audit --no-fund`.
+- [bin/vcli.mjs](bin/vcli.mjs) loads `dist/cli.js`. Run `npm run build` after source changes before checking the executable or running tests that import `dist/`. From the VCLI NestJS package directory, `node bin/vcli.mjs --help` lists implemented commands.
+- For static verification, `npm run check` covers formatting, lint, architecture, and type checks across the CLI and auth workspace. For a focused CLI behavior check, use `node --test test/cli.test.ts`. The full CLI suite uses `npm test`, and the auth runtime suite uses `npm test --workspace @vcli/auth-runtime`.
 
 ## Scope and authority
 
 - Follow the user's current authorized task. The owner authorized standalone repository setup, Orca registration, and the initial private GitHub publication. The owner subsequently authorized full CLI source implementation through all phases. Provider provisioning, npm publication, production migrations and deployment still require their own authorization.
 - When implementation is authorized, complete the selected scope and phase gates. A phase boundary is not an automatic requirement to ask again if the user already authorized continuing.
-- Use [STATUS.md](phases/STATUS.md) and the selected phase's tasks/acceptance files. Keep incomplete work and external setup visible. Never mark a test or phase passed without its evidence.
+- Use [CLI verification](docs/CLI-VERIFICATION.md) and the selected capability guide. Keep incomplete work and external setup visible. Never mark a check as passed without its evidence.
 - The current planning baseline is in `docs/DECISIONS.md`. Record consequential deviations instead of silently changing provider scope or architecture. Resolve routine details within the authorized scope.
 - Historical material under `docs/archive/` is background, not active instructions. No SuperUp milestone board, Makefile, directory layout, product rule, credentials, or private source is required.
 - Use the existing checkout. Do not create a worktree unless the user requests one. Preserve unrelated changes.
@@ -30,7 +38,7 @@ This is the standalone VCLI NestJS package in the VCLI workspace. It is not the 
 - Validate desired choices against realized project state. Recheck existence/content preconditions for every touched path. Dry runs do not mutate the project or external systems.
 - Fail clearly on ownership conflicts, unsupported combinations, unsafe paths, stale plans, or incomplete installation. Recovery must not reset a repository or overwrite newer edits.
 - Source generation, dependency installation, configuration, runtime checks, provider acceptance, and deployment are separate outcomes.
-- New projects use their pinned local CLI once installed. Before implementation exists, do not claim proposed VCLI commands are executable.
+- Use the pinned local CLI when working inside a generated project.
 
 ## Verification and reporting
 

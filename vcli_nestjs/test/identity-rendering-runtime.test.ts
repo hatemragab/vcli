@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { join } from 'node:path';
 import { test } from 'node:test';
-import { pathToFileURL } from 'node:url';
+import {
+  Module,
+  type INestApplicationContext,
+  type Type,
+} from '@nestjs/common';
+import { MODULE_METADATA } from '@nestjs/common/constants.js';
+import { NestFactory } from '@nestjs/core';
+import type { BootstrapBinding } from '../templates/runtime/common/src/core/bootstrap/bootstrap-bindings.ts';
 import { selectedIdentityFixture } from './identity-rendering-fixture.ts';
 
 function config(application = false) {
@@ -11,6 +17,8 @@ function config(application = false) {
     auth: {
       firebaseProjectId: 'synthetic-project',
       firebaseMethods: ['google.com', 'phone'],
+      rateLimitRedisUrl: 'redis://127.0.0.1:6379',
+      rateLimitNamespace: 'identity-rendering:test',
       recentAuthSeconds: 300,
       sessionTtlSeconds: 86400,
     },
@@ -61,13 +69,54 @@ function syntheticFirebase(application = false) {
   return { provider, closed: () => closed, actionAuth: () => actionAuth };
 }
 
+function controllerNames(entry: Type<unknown>) {
+  const controllers: readonly Type<unknown>[] = Reflect.getMetadata(
+    MODULE_METADATA.CONTROLLERS,
+    entry,
+  );
+  return controllers.map((controller) => controller.name);
+}
+
+async function withIdentityContext<T>(
+  fixture: Awaited<ReturnType<typeof selectedIdentityFixture>>,
+  entry: Type<unknown>,
+  db: object,
+  bindings: readonly BootstrapBinding[],
+  run: (app: INestApplicationContext) => Promise<T> | T,
+): Promise<T> {
+  const { withBootstrapBindings } = await fixture.load(
+    'core/bootstrap/bootstrap-bindings',
+  );
+  const { bindDatabase } = await fixture.load('core/database/database.module');
+  const app: INestApplicationContext = await withBootstrapBindings(
+    [bindDatabase(db), ...bindings],
+    () =>
+      NestFactory.createApplicationContext(entry, {
+        logger: false,
+        abortOnError: false,
+      }),
+  );
+  try {
+    return await run(app);
+  } finally {
+    await app.close();
+  }
+}
+
 for (const mode of ['provider', 'application'] as const) {
   test(`generated Firebase ${mode} factory uses only trusted supplied provider and closes it once`, async () => {
     const fixture = await selectedIdentityFixture('postgres', 'firebase', mode);
     fixture.emit();
-    const { createIdentityRuntime } = await fixture.load(
+    const { IdentityModule, createIdentityRuntime } = await fixture.load(
       'modules/identity/identity.module',
     );
+    const { IdentityRateLimits } = await fixture.load(
+      'modules/identity/identity-rate-limits.service',
+    );
+    const { FIREBASE_VERIFIER } = await fixture.load(
+      'modules/identity/firebase-identity.controller',
+    );
+    const db = {};
     const fake = syntheticFirebase(mode === 'application');
     const delivery = {
       prepare() {
@@ -79,19 +128,15 @@ for (const mode of ['provider', 'application'] as const) {
     };
     const runtime =
       mode === 'application'
-        ? await createIdentityRuntime(config(true), {}, delivery, {
+        ? await createIdentityRuntime(config(true), db, delivery, {
             firebase: fake.provider,
           })
-        : await createIdentityRuntime(
-            config(),
-            {},
-            { firebase: fake.provider },
-          );
+        : await createIdentityRuntime(config(), db, {
+            firebase: fake.provider,
+          });
     assert.equal(typeof runtime.authority.verify, 'function');
     assert.equal(typeof runtime.cleanup.drain, 'function');
-    const controllers = runtime.module.controllers.map(
-      (controller: { name: string }) => controller.name,
-    );
+    const controllers = controllerNames(IdentityModule);
     assert.ok(controllers.includes('SelfAccountController'));
     assert.ok(controllers.includes('InstallationLifecycleController'));
     assert.ok(controllers.includes('ProviderLinksController'));
@@ -99,61 +144,68 @@ for (const mode of ['provider', 'application'] as const) {
       controllers.includes('FirebaseActionsController'),
       mode === 'application',
     );
-    assert.ok(
-      runtime.module.providers.some(
-        (provider: { useValue?: unknown }) =>
-          provider.useValue === fake.provider,
-      ),
-    );
     assert.equal(fake.actionAuth(), mode === 'application' ? 1 : 0);
+    const limiter = await withIdentityContext(
+      fixture,
+      IdentityModule,
+      db,
+      runtime.bindings,
+      (app) => {
+        assert.equal(app.get(FIREBASE_VERIFIER), fake.provider);
+        return app.get(IdentityRateLimits);
+      },
+    );
+    assert.ok(limiter);
     await Promise.all([runtime.close(), runtime.close()]);
     assert.equal(fake.closed(), 1);
+    await assert.rejects(
+      limiter.spend([{ key: 'synthetic-scope', limit: 1 }]),
+      {
+        code: 'IDENTITY_RATE_UNAVAILABLE',
+        status: 503,
+      },
+    );
   });
 }
 
-test('a custom module importing configured identity can inject the principal guard', async () => {
+test('a custom module importing IdentityModule can inject the principal guard', async () => {
   const fixture = await selectedIdentityFixture(
     'postgres',
     'firebase',
     'provider',
   );
   fixture.emit();
-  const { createIdentityRuntime } = await fixture.load(
+  const { IdentityModule, createIdentityRuntime } = await fixture.load(
     'modules/identity/identity.module',
   );
   const { PrincipalGuard } = await fixture.load('core/http/principal.guard');
-  const { NestFactory } = await import(
-    pathToFileURL(join(fixture.directory, 'node_modules/@nestjs/core/index.js'))
-      .href
-  );
-  const runtime = await createIdentityRuntime(
-    config(),
-    {},
-    { firebase: syntheticFirebase().provider },
-  );
+  const db = {};
+  const runtime = await createIdentityRuntime(config(), db, {
+    firebase: syntheticFirebase().provider,
+  });
   class OrdersModule {}
+  Module({
+    imports: [IdentityModule],
+    providers: [{ provide: 'ORDERS_GUARD', useExisting: PrincipalGuard }],
+  })(OrdersModule);
   try {
-    const app = await NestFactory.createApplicationContext(
-      {
-        module: OrdersModule,
-        imports: [runtime.module],
-        providers: [{ provide: 'ORDERS_GUARD', useExisting: PrincipalGuard }],
+    await withIdentityContext(
+      fixture,
+      OrdersModule,
+      db,
+      runtime.bindings,
+      async (app) => {
+        const guard = app.get('ORDERS_GUARD');
+        assert.ok(guard instanceof PrincipalGuard);
+        const anonymousRequest = {
+          switchToHttp: () => ({ getRequest: () => ({ headers: {} }) }),
+        };
+        await assert.rejects(guard.canActivate(anonymousRequest), {
+          code: 'UNAUTHENTICATED',
+          status: 401,
+        });
       },
-      { logger: false, abortOnError: false },
     );
-    try {
-      const guard = app.get('ORDERS_GUARD');
-      assert.ok(guard instanceof PrincipalGuard);
-      const anonymousRequest = {
-        switchToHttp: () => ({ getRequest: () => ({ headers: {} }) }),
-      };
-      await assert.rejects(guard.canActivate(anonymousRequest), {
-        code: 'UNAUTHENTICATED',
-        status: 401,
-      });
-    } finally {
-      await app.close();
-    }
   } finally {
     await runtime.close();
   }
@@ -199,6 +251,8 @@ test('generated local factory enforces selected immediate/reliable writer semant
         activeSigningKeyId: 'active',
         keys: [{ id: 'active', key: randomBytes(32) }],
       },
+      rateLimitRedisUrl: 'redis://127.0.0.1:6379',
+      rateLimitNamespace: 'identity-rendering:test',
       sessionTtlSeconds: 86400,
       recentAuthSeconds: 300,
       accessTtlSeconds: 300,
@@ -221,8 +275,11 @@ test('generated local factory enforces selected immediate/reliable writer semant
   for (const mode of ['immediate', 'reliable'] as const) {
     const fixture = await selectedIdentityFixture('postgres', 'local', mode);
     fixture.emit();
-    const { createIdentityRuntime } = await fixture.load(
+    const { IdentityModule, createIdentityRuntime } = await fixture.load(
       'modules/identity/identity.module',
+    );
+    const { IdentityRateLimits } = await fixture.load(
+      'modules/identity/identity-rate-limits.service',
     );
     if (mode === 'immediate')
       await assert.rejects(
@@ -233,17 +290,31 @@ test('generated local factory enforces selected immediate/reliable writer semant
       await assert.rejects(createIdentityRuntime(options, {}, sender), {
         code: 'RELIABLE_ACTION_DELIVERY_REQUIRED',
       });
+    const db = {};
     const runtime = await createIdentityRuntime(
       options,
-      {},
+      db,
       sender,
       mode === 'reliable' ? delivery : undefined,
     );
-    const controllers = runtime.module.controllers.map(
-      (controller: { name: string }) => controller.name,
-    );
+    const controllers = controllerNames(IdentityModule);
     assert.ok(controllers.includes('LocalIdentityController'));
     assert.equal(controllers.includes('FirebaseIdentityController'), false);
+    const limiter = await withIdentityContext(
+      fixture,
+      IdentityModule,
+      db,
+      runtime.bindings,
+      (app) => app.get(IdentityRateLimits),
+    );
+    assert.ok(limiter);
     await runtime.close();
+    await assert.rejects(
+      limiter.spend([{ key: 'synthetic-scope', limit: 1 }]),
+      {
+        code: 'IDENTITY_RATE_UNAVAILABLE',
+        status: 503,
+      },
+    );
   }
 });

@@ -24,7 +24,7 @@ export class RealtimeStoreService implements RealtimeStore {
   async assertInitialized(): Promise<void> {
     if (
       !(await this.database.connection
-        .db!.collection('ref_migrations')
+        .db!.collection('migrations')
         .findOne({ name: 'realtime-v1', completed: true }))
     )
       throw new ApplicationError('REALTIME_INITIALIZATION_REQUIRED', 503);

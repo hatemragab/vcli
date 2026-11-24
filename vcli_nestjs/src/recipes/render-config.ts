@@ -40,13 +40,15 @@ function fieldBounds(schema: string): { minimum?: number; maximum?: number } {
     ...(maximum ? { maximum: Number(maximum[1]) } : {}),
   };
 }
-/** This single selected-field model drives validation, examples and deployment keys. */
+/** This single selected-field model drives validation, local defaults and deployment keys. */
 export function configuration(config: ProjectConfig): {
   files: RenderedFile[];
   keys: string[];
   fields: EnvironmentContribution[];
+  developmentDefaults: Record<string, string>;
 } {
   const auth = selection(config, 'auth'),
+    database = selection(config, 'database'),
     storage = selection(config, 'storage'),
     realtime = selection(config, 'realtime');
   const reliableMail =
@@ -118,28 +120,26 @@ export function loadConfig(env:NodeJS.ProcessEnv=process.env) {
   ${guards.join('\n')}
   return {${output.join(',\n')}};
 }
-export function loadSelectedEnvFile():void {
+export function loadSelectedEnvFile():${database ? 'string|undefined' : 'void'} {
   const path=process.env.APP_ENV_FILE;
   if(!path) return;
   if(process.env.NODE_ENV==='production' && /development|test/.test(path)) throw new ApplicationError('UNSAFE_ENV_FILE',500);
   const result=loadDotenv({path,override:false,quiet:true});
   if(result.error) throw new ApplicationError('ENV_FILE_UNAVAILABLE',500);
+  ${database ? 'return result.parsed?.NODE_ENV;' : ''}
 }
 `;
-  const example = (production: boolean) =>
-    '# Set required blank values privately. Runtime environment overrides APP_ENV_FILE.\n' +
-    fields
-      .map(
-        (f) =>
-          `${f.key}=${production ? (f.production ?? f.example) : f.example}`,
-      )
-      .join('\n') +
-    '\n';
   return {
+    developmentDefaults: Object.fromEntries(
+      fields
+        .filter((field) => field.example !== '')
+        .map((field) => [field.key, field.example]),
+    ),
     keys: fields.map((f) => f.key),
     fields: fields.map((field) => {
       const secret = [
         'DATABASE_URL',
+        'REDIS_URL',
         'JWT_KEYS_JSON',
         'MAIL_DELIVERY_KEYS_JSON',
         'RESEND_API_KEY',
@@ -171,8 +171,6 @@ export function loadSelectedEnvFile():void {
         'src/core/config/app-config.ts',
         "import type {loadConfig} from './load-config.js';\nexport type AppConfig=ReturnType<typeof loadConfig>;\n",
       ),
-      file('.env.development.example', example(false)),
-      file('.env.production.example', example(true)),
     ],
   };
 }

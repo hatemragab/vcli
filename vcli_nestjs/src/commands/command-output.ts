@@ -76,13 +76,22 @@ export function publicError(
     return {
       code: error.message,
       action:
-        'Create the private config file from the selected example and restrict it to the owner. A dry run does not read it.',
+        'Supply an existing owner-only private config file with --config-file. Use vcli config check --dry-run for the selected configuration keys.',
     };
   if (error instanceof Error && error.message === 'UNSAFE_PRIVATE_ENV_FILE')
     return {
       code: error.message,
       action:
         'Use an absolute owner-only regular file with mode 0600 for --config-file.',
+    };
+  if (
+    error instanceof Error &&
+    error.message === 'LOCAL_OPERATION_OWNERSHIP_CONFLICT'
+  )
+    return {
+      code: error.message,
+      action:
+        'An existing VCLI operation holds the project lock. Stop it in the IDE or terminal, or wait for it to finish, then retry.',
     };
   if (error instanceof CommanderError)
     return {

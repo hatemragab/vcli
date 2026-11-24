@@ -123,7 +123,12 @@ export function validatePackageFields(
   content: string,
   fields: PackageFields,
 ): void {
-  const current = packageObject(content);
+  validateFields(packageObject(content), fields);
+}
+function validateFields(
+  current: Record<string, JsonValue>,
+  fields: PackageFields,
+): void {
   for (const [field, item] of Object.entries(fields))
     if (
       field !== appVersionField &&
@@ -143,8 +148,8 @@ export function mergePackage(
   const target = packageObject(rendered);
   const fields = fieldsOf(target);
   if (before === null) return { content: json(target), fields };
-  validatePackageFields(before, oldFields);
   const current = packageObject(before);
+  validateFields(current, oldFields);
   for (const [field, item] of Object.entries(fields)) {
     const existing = getField(current, field);
     if (

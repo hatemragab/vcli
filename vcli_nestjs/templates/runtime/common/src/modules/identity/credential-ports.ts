@@ -44,3 +44,25 @@ export interface AccessTokens {
     }>
   >;
 }
+
+export type ProviderCleanup = Readonly<{
+  id: string;
+  identityKey: string;
+  generation: number;
+  action: 'revoke' | 'delete' | 'unlink';
+  method: string | null;
+  status:
+    'pending' | 'leased' | 'retry' | 'unknown' | 'completed' | 'exhausted';
+  attempts: number;
+  nextAttemptAt: number;
+  leaseId: string | null;
+  leaseUntil: number;
+  lastCode:
+    | 'NONE'
+    | 'PROVIDER_RETRY'
+    | 'PROVIDER_UNKNOWN'
+    | 'PROVIDER_REJECTED'
+    | 'STALE_BINDING';
+  createdAt: number;
+  completedAt: number | null;
+}>;

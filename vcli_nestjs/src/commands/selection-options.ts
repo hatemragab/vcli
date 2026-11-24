@@ -8,6 +8,8 @@ import { CliError } from './cli-error.js';
 export interface SelectionOptions {
   database?: string;
   auth?: string;
+  redisDocker?: boolean;
+  localAuthProfile?: string;
   localIdentifier?: string;
   mail?: string;
   reliableActions?: boolean;
@@ -103,13 +105,31 @@ export function selectRecipes(
       settings.actionDelivery = options.actionDelivery;
     add('auth.firebase', settings);
   }
-  if (options.localIdentifier !== undefined) {
+  if (
+    options.localAuthProfile !== undefined ||
+    options.localIdentifier !== undefined
+  ) {
     if (selected.auth?.recipe !== 'auth.local')
       throw new CliError(
         'INVALID_OPTIONS',
-        'Select auth.local before supplying --local-identifier.',
+        'Select auth.local before supplying --local-auth-profile or --local-identifier.',
       );
-    add('auth.local', { identifier: options.localIdentifier });
+    add('auth.local', {
+      ...(options.localAuthProfile !== undefined
+        ? { profile: options.localAuthProfile }
+        : {}),
+      ...(options.localIdentifier !== undefined
+        ? { identifier: options.localIdentifier }
+        : {}),
+    });
+  }
+  if (options.redisDocker) {
+    if (!selected.auth)
+      throw new CliError(
+        'INVALID_OPTIONS',
+        'Select authentication before supplying --redis-docker.',
+      );
+    add(selected.auth.recipe, { redisDocker: true });
   }
   if (options.realtimeScale) {
     if (!selected.realtime)

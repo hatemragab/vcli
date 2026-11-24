@@ -6,7 +6,7 @@ export type Account = Readonly<{
   enabled: boolean;
   createdAt: number;
 }>;
-export const accountTable = pgTable('ref_accounts', {
+export const accountTable = pgTable('accounts', {
   id: uuid('id').primaryKey(),
   email: text('email'),
   emailVerified: boolean('email_verified').notNull(),

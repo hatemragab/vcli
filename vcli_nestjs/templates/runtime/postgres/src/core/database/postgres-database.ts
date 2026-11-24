@@ -52,7 +52,7 @@ export class PostgresDatabase implements Transactions {
     try {
       if (requireInitialized) {
         const check = await value.db.execute(
-          sql`SELECT name FROM ref_migrations WHERE name IN ('identity-v1','identity-lifecycle-v2')`,
+          sql`SELECT name FROM migrations WHERE name IN ('identity-v1','identity-lifecycle-v2')`,
         );
         if (check.rowCount !== 2)
           throw new ApplicationError('DATABASE_INITIALIZATION_REQUIRED', 500);

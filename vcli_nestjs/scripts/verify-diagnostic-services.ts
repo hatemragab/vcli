@@ -20,9 +20,12 @@ import {
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import ts from 'typescript';
 import { z } from 'zod';
 import type { ProjectConfig, RecipeCatalog } from '../src/contracts.ts';
+import { linkGeneratedDependencies } from '../test/generated-dependencies.ts';
 
 const sources = [
   'application',
@@ -364,7 +367,7 @@ export async function prepareDiagnosticSelections(
         ),
       };
     const rendered = await recipeCatalog.render(config, recipes);
-    const directory = join(root, 'selected-' + database);
+    const directory = join(root, 'projects', database);
     await mkdir(directory, { recursive: true });
     for (const file of rendered.files) {
       await mkdir(dirname(join(directory, file.path)), { recursive: true });
@@ -379,22 +382,7 @@ export async function prepareDiagnosticSelections(
       await mkdir(dirname(join(directory, path)), { recursive: true });
       await writeFile(join(directory, path), content);
     }
-    await mkdir(join(directory, 'node_modules'), { recursive: true });
-    for (const cache of [
-      `examples/reference-api${database === 'postgres' ? '-postgres' : ''}/node_modules`,
-      'node_modules',
-    ]) {
-      for (const entry of await readdir(cache, { withFileTypes: true })) {
-        if (entry.name.startsWith('.')) continue;
-        await symlink(
-          resolve(cache, entry.name),
-          join(directory, 'node_modules', entry.name),
-          'dir',
-        ).catch((error) => {
-          if (error.code !== 'EEXIST') throw error;
-        });
-      }
-    }
+    await linkGeneratedDependencies(directory);
     const sourceFiles = ts.sys.readDirectory(
       join(directory, 'src'),
       ['.ts'],
@@ -476,30 +464,6 @@ async function stdioQueries(
   evidence: string,
   scope: Facts,
 ): Promise<void> {
-  const sdk = join(
-    selection.directory,
-    'node_modules/@modelcontextprotocol/sdk/dist/esm',
-  );
-  type Client = {
-    connect(transport: unknown): Promise<void>;
-    listTools(): Promise<{
-      tools: { name: string; annotations?: { readOnlyHint?: boolean } }[];
-    }>;
-    callTool(
-      input: Facts,
-      schema?: unknown,
-      options?: { timeout: number },
-    ): Promise<unknown>;
-    close(): Promise<void>;
-  };
-  const { Client } = (await import(
-    pathToFileURL(join(sdk, 'client/index.js')).href
-  )) as { Client: new (info: Facts) => Client };
-  const { StdioClientTransport } = (await import(
-    pathToFileURL(join(sdk, 'client/stdio.js')).href
-  )) as {
-    StdioClientTransport: new (options: Facts) => { close(): Promise<void> };
-  };
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [
@@ -1322,7 +1286,7 @@ export async function runDiagnosticServices(options: {
       { mode: 0o600 },
     );
     if (report.passed)
-      for (const path of ['compiler', 'selected-mongodb', 'selected-postgres'])
+      for (const path of ['compiler', 'projects'])
         await rm(join(root, path), { recursive: true, force: true });
   }
   return report;
@@ -1334,20 +1298,18 @@ export function diagnosticProbeSources(
 ): Readonly<Record<string, string>> {
   z.uuid().parse(runId);
   return {
-    'src/app.custom.module.ts': `import {Module,type DynamicModule} from '@nestjs/common';
-import type {ConfiguredCapabilities} from './core/configured-capabilities.js';
+    'src/app.custom.module.ts': `import {Module} from '@nestjs/common';
 import {DiagnosticProbeModule} from './modules/diagnostic-probe/diagnostic-probe.module.js';
-@Module({})
-export class AppCustomModule {static register(capabilities:ConfiguredCapabilities):DynamicModule {
-if(!capabilities.database||!capabilities.diagnostics)throw new Error('PROBE_CAPABILITY_REQUIRED');
-return {module:AppCustomModule,imports:[DiagnosticProbeModule.register(capabilities.database,capabilities.diagnostics)]};}}
+@Module({imports:[DiagnosticProbeModule]})
+export class AppCustomModule {}
 `,
-    'src/modules/diagnostic-probe/diagnostic-probe.module.ts': `import {Module,type DynamicModule} from '@nestjs/common';
+    'src/modules/diagnostic-probe/diagnostic-probe.module.ts': `import {Module} from '@nestjs/common';
+import {DatabaseModule} from '../../core/database/database.module.js';
+import {DiagnosticsModule} from '../diagnostics/diagnostics.module.js';
 import {DiagnosticProbeController} from './diagnostic-probe.controller.js';
 import {DiagnosticProbeService} from './diagnostic-probe.service.js';
-@Module({})
-export class DiagnosticProbeModule {static register(database:DynamicModule,diagnostics:DynamicModule):DynamicModule {
-return {module:DiagnosticProbeModule,imports:[database,diagnostics],providers:[DiagnosticProbeService],controllers:[DiagnosticProbeController]};}}
+@Module({imports:[DatabaseModule,DiagnosticsModule],providers:[DiagnosticProbeService],controllers:[DiagnosticProbeController]})
+export class DiagnosticProbeModule {}
 `,
     'src/modules/diagnostic-probe/diagnostic-probe.controller.ts': `import {Body,Controller,Post,HttpCode,Res,Inject} from '@nestjs/common';
 import type {Response} from 'express';
@@ -1453,7 +1415,7 @@ export async function runJoinedDiagnosticServices(options: {
       runId,
       image,
       profile:
-        'current-source foundation/PostgreSQL/all diagnostics; fixture-only probe imports actual configured modules',
+        'current-source foundation/PostgreSQL/all diagnostics; fixture-only probe imports the static database and diagnostics modules',
       database:
         'real task-owned PostgreSQL; actual generated createApp/native transaction observation',
       limits: {
@@ -1919,29 +1881,6 @@ export async function runJoinedDiagnosticServices(options: {
     await step(
       'generated stdio MCP returns the same real joined operation and SQL/HTTP assertions',
       async () => {
-        const sdk = join(
-          selection.directory,
-          'node_modules/@modelcontextprotocol/sdk/dist/esm',
-        );
-        type Client = {
-          connect(transport: unknown): Promise<void>;
-          callTool(
-            input: Facts,
-            schema?: unknown,
-            options?: { timeout: number },
-          ): Promise<unknown>;
-          close(): Promise<void>;
-        };
-        const { Client } = (await import(
-          pathToFileURL(join(sdk, 'client/index.js')).href
-        )) as { Client: new (info: Facts) => Client };
-        const { StdioClientTransport } = (await import(
-          pathToFileURL(join(sdk, 'client/stdio.js')).href
-        )) as {
-          StdioClientTransport: new (options: Facts) => {
-            close(): Promise<void>;
-          };
-        };
         const transport = new StdioClientTransport({
           command: process.execPath,
           args: [
@@ -2127,7 +2066,7 @@ export async function runJoinedDiagnosticServices(options: {
       { mode: 0o600 },
     );
     if (report.passed)
-      for (const path of ['compiler', 'selected-postgres', 'checkpoints'])
+      for (const path of ['compiler', 'projects', 'checkpoints'])
         await rm(join(root, path), { recursive: true, force: true });
   }
   return report;

@@ -3,6 +3,7 @@ import { cp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
+import { linkGeneratedDependencies } from './generated-dependencies.ts';
 import type { ProjectConfig } from '../src/contracts.ts';
 import type { Principal } from '../templates/runtime/common/src/core/auth/principal.js';
 import type { PrincipalAuthority } from '../templates/runtime/common/src/core/auth/principal-authority.js';
@@ -10,6 +11,7 @@ import type { EventPublisher } from '../templates/runtime/common/src/core/realti
 import type {
   Note,
   NoteDraft,
+  NoteEdit,
 } from '../templates/runtime/common/src/modules/notes/notes-input.js';
 import type {
   CreateNoteResult,
@@ -22,6 +24,7 @@ export type {
   EventPublisher,
   Note,
   NoteDraft,
+  NoteEdit,
   CreateNoteResult,
   NotesPage,
 };
@@ -35,11 +38,14 @@ export interface NotesOperations {
   ): Promise<CreateNoteResult>;
   getOwned(principal: Principal, id: string): Promise<Note>;
   listOwned(principal: Principal, limit?: number): Promise<NotesPage>;
+  editOwned(principal: Principal, id: string, patch: NoteEdit): Promise<Note>;
+  removeOwned(principal: Principal, id: string): Promise<void>;
 }
 export type Loader = <T>(path: string) => Promise<T>;
 export function notesConfig(
   database: Database,
   realtime?: string,
+  media = false,
 ): ProjectConfig {
   return {
     schemaVersion: 1,
@@ -49,6 +55,12 @@ export function notesConfig(
       database: { recipe: `database.${database}`, options: {} },
       auth: { recipe: 'auth.firebase', options: {} },
       notes: { recipe: 'example.notes', options: {} },
+      ...(media
+        ? {
+            storage: { recipe: 'storage.local', options: {} },
+            media: { recipe: 'media.private', options: {} },
+          }
+        : {}),
       ...(realtime
         ? { realtime: { recipe: `realtime.${realtime}`, options: {} } }
         : {}),
@@ -106,6 +118,7 @@ let renderer:
       notes: typeof import('../src/recipes/render-notes.js');
       schema: typeof import('../src/recipes/render-schema.js');
       scaffold: typeof import('../src/recipes/render-scaffold.js');
+      catalog: typeof import('../src/recipes/catalog.js');
     }>
   | undefined;
 export function notesRenderers() {
@@ -118,8 +131,8 @@ export function notesRenderers() {
     );
     await link(resolve('templates'), join(notesFixtureRoot, 'templates'));
     compile(
-      ['render-notes', 'render-schema', 'render-scaffold'].map((name) =>
-        resolve(`src/recipes/${name}.ts`),
+      ['render-notes', 'render-schema', 'render-scaffold', 'catalog'].map(
+        (name) => resolve(`src/recipes/${name}.ts`),
       ),
       resolve('src'),
       root,
@@ -134,8 +147,35 @@ export function notesRenderers() {
       scaffold: (await import(
         pathToFileURL(join(root, 'recipes/render-scaffold.js')).href
       )) as typeof import('../src/recipes/render-scaffold.js'),
+      catalog: (await import(
+        pathToFileURL(join(root, 'recipes/catalog.js')).href
+      )) as typeof import('../src/recipes/catalog.js'),
     };
   })());
+}
+
+/** Compile the real selected Media closure without starting databases or providers. */
+export async function compileNotesWithMedia(database: Database) {
+  const root = join(notesFixtureRoot, database + '-media');
+  const config = notesConfig(database, undefined, true);
+  const {
+    catalog: { recipeCatalog },
+  } = await notesRenderers();
+  const resolved = recipeCatalog.recipes.filter(
+    (recipe) => config.capabilities[recipe.family]?.recipe === recipe.id,
+  );
+  const { files } = await recipeCatalog.render(config, resolved);
+  const sources: string[] = [];
+  for (const file of files) {
+    const source = file.path.startsWith('src/') && file.path.endsWith('.ts');
+    if (!source && file.path !== 'package.json') continue;
+    const target = join(root, file.path);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, file.content);
+    if (source) sources.push(target);
+  }
+  await linkGeneratedDependencies(root);
+  compile(sources, join(root, 'src'), join(root, 'out'), { noEmit: true });
 }
 const fixtures = new Map<Database, Promise<{ root: string; load: Loader }>>();
 export function notesFixture(database: Database) {
@@ -155,9 +195,20 @@ export function notesFixture(database: Database) {
       join(root, 'src/core/database'),
       { recursive: true },
     );
+    const accounts = join(root, 'src/modules/accounts');
+    await mkdir(accounts, { recursive: true });
+    for (const file of ['account.entity.ts', 'account.service.ts']) {
+      await cp(
+        `templates/runtime/${database}/src/modules/accounts/${file}`,
+        join(accounts, file),
+      );
+    }
     for (const path of [
       'auth/principal.ts',
       'auth/principal-authority.ts',
+      'bootstrap/bootstrap-bindings.ts',
+      'database/module-seeder.ts',
+      'database/seed-error.ts',
       'errors/application-error.ts',
       'http/principal.guard.ts',
       'http/current-principal.decorator.ts',
@@ -174,12 +225,7 @@ export function notesFixture(database: Database) {
       'export type AppConfig={database:{url:string}};\n',
     );
     await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
-    await link(
-      resolve(
-        `examples/reference-api${database === 'postgres' ? '-postgres' : ''}/node_modules`,
-      ),
-      join(root, 'node_modules'),
-    );
+    await linkGeneratedDependencies(root);
     await cp(
       'templates/runtime/common/scripts/architecture-rules.ts',
       join(root, 'architecture-rules.ts'),
@@ -222,16 +268,17 @@ export {NotesService};`;
     await writeFile(
       join(root, 'src/test-http.ts'),
       `import 'reflect-metadata';
-import {Module, type DynamicModule} from '@nestjs/common';
+import {Module} from '@nestjs/common';
 import {NestFactory} from '@nestjs/core';
-import {NotesModule} from './modules/notes/notes.module.js';
-import {NotesService} from './modules/notes/notes.service.js';
+import {withBootstrapBindings} from './core/bootstrap/bootstrap-bindings.js';
+import {bindPrincipalAuthority} from './core/http/http-security.module.js';
+import {NotesModule,bindNotesService} from './modules/notes/notes.module.js';
+import type {NotesService} from './modules/notes/notes.service.js';
 import {ApplicationError} from './core/errors/application-error.js';
 import type {PrincipalAuthority} from './core/auth/principal-authority.js';
-@Module({}) class TestRoot {}
+@Module({imports:[NotesModule]}) class TestRoot {}
 export async function startHttp(authority:PrincipalAuthority,service:NotesService){
-  const module:DynamicModule={module:TestRoot,imports:[NotesModule.register(authority,service)]};
-  const app=await NestFactory.create(module,{logger:false});
+  const app=await withBootstrapBindings([bindPrincipalAuthority(authority),bindNotesService(service)],()=>NestFactory.create(TestRoot,{logger:false,abortOnError:false}));
   try {app.setGlobalPrefix('api');app.useGlobalFilters({catch(error:unknown,host:import('@nestjs/common').ArgumentsHost){const response=host.switchToHttp().getResponse<import('express').Response>();const status=error instanceof ApplicationError?error.status:500;response.status(status).json({error:{code:error instanceof ApplicationError?error.code:'INTERNAL_ERROR'}});}});await app.listen(0,'127.0.0.1');return {url:await app.getUrl(),close:()=>app.close()};}
   catch(error){await app.close();throw error;}
 }`,

@@ -10,6 +10,7 @@ import {
   type FileHandle,
 } from 'node:fs/promises';
 import { join } from 'node:path';
+import { validEvidenceLimits } from '../../core/diagnostics/evidence-bounds.js';
 import {
   eventSource,
   sourceInputSchema,
@@ -49,18 +50,7 @@ export class DiagnosticsService implements DiagnosticEvents {
   ): Promise<DiagnosticsService> {
     const writer = new DiagnosticsService(config, environment, source);
     try {
-      if (
-        !Number.isSafeInteger(config.maxBytes) ||
-        config.maxBytes < 512 ||
-        config.maxBytes > 10485760 ||
-        !Number.isSafeInteger(config.maxFiles) ||
-        config.maxFiles < 1 ||
-        config.maxFiles > 10 ||
-        (config.maxAgeMs !== undefined &&
-          (!Number.isInteger(config.maxAgeMs) ||
-            config.maxAgeMs < 1000 ||
-            config.maxAgeMs > 604800000))
-      )
+      if (!validEvidenceLimits(config))
         throw new Error('INVALID_EVIDENCE_LIMITS');
       await mkdir(config.directory, { recursive: true, mode: 0o700 });
       const stat = await lstat(config.directory);

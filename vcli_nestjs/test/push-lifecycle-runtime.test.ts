@@ -70,6 +70,21 @@ type Runtime = {
   Repository: new (store: PushStateStore) => Repository;
   decode(value: unknown): PushState;
 };
+type FcmRuntime = {
+  FcmPushService: new (
+    app: unknown,
+    options: {
+      messaging: { send(message: unknown): Promise<string> };
+      clock?: () => number;
+      timeoutMs?: number;
+    },
+  ) => PushSender;
+  translateFcmError(error: unknown, now?: number): PushOutcome;
+};
+const fcmUnregisteredDetail = {
+  '@type': 'type.googleapis.com/google.firebase.fcm.v1.FcmError',
+  errorCode: 'UNREGISTERED',
+};
 const runtimes = new Map<string, Runtime>();
 const loaders = new Map<string, Awaited<ReturnType<typeof pushFixture>>>();
 before(async () => {
@@ -531,17 +546,9 @@ for (const database of ['mongodb', 'postgres']) {
 }
 test('controlled FCM SDK: exact ordinary payload, explicit error mapping, retry-after and timeout unknown', async () => {
   const load = loaders.get('postgres')!;
-  const { FcmPushService, translateFcmError } = await load<{
-    FcmPushService: new (
-      app: unknown,
-      options: {
-        messaging: { send(message: unknown): Promise<string> };
-        clock?: () => number;
-        timeoutMs?: number;
-      },
-    ) => PushSender;
-    translateFcmError(error: unknown, now?: number): PushOutcome;
-  }>('modules/push/fcm-push.service');
+  const { FcmPushService, translateFcmError } = await load<FcmRuntime>(
+    'modules/push/fcm-push.service',
+  );
   const h = harness('postgres'),
     p = h.enroll(actor());
   await h.register(p);
@@ -578,18 +585,6 @@ test('controlled FCM SDK: exact ordinary payload, explicit error mapping, retry-
     'rejected',
   );
   assert.equal(sent.length, 1);
-  for (const code of [
-    'messaging/registration-token-not-registered',
-    'messaging/invalid-registration-token',
-  ]) {
-    const result = translateFcmError({ code, message: 'raw secret' });
-    assert.equal(result.status, 'rejected');
-    assert.equal(
-      result.status === 'rejected' && result.invalidDestination,
-      true,
-    );
-    assert.equal(JSON.stringify(result).includes('secret'), false);
-  }
   for (const code of [
     'messaging/invalid-argument',
     'messaging/invalid-payload',
@@ -636,6 +631,148 @@ test('controlled FCM SDK: exact ordinary payload, explicit error mapping, retry-
   assert.equal((await timeout.submit(destination, m, now)).status, 'unknown');
   release();
   await gate;
+});
+test('controlled FCM SDK: only explicit invalid-token evidence can retire a destination', async () => {
+  const { translateFcmError } = await loaders.get('postgres')!<FcmRuntime>(
+    'modules/push/fcm-push.service',
+  );
+  const ambiguousCode = 'messaging/registration-token-not-registered';
+  const invalid = {
+    status: 'rejected',
+    code: 'FCM_INVALID_DESTINATION',
+    invalidDestination: true,
+  };
+  const unconfirmed = {
+    status: 'rejected',
+    code: 'FCM_DESTINATION_UNCONFIRMED',
+    invalidDestination: false,
+  };
+  assert.deepEqual(
+    translateFcmError({
+      code: 'messaging/invalid-registration-token',
+      message: 'raw secret',
+    }),
+    invalid,
+  );
+  assert.deepEqual(
+    translateFcmError({
+      code: ambiguousCode,
+      httpResponse: {
+        status: 404,
+        data: { error: { details: [fcmUnregisteredDetail] } },
+      },
+    }),
+    invalid,
+  );
+  assert.deepEqual(translateFcmError({ code: ambiguousCode }), unconfirmed);
+
+  // The Admin SDK can map a generic HTTP 404 to the same local error code.
+  for (const details of [
+    undefined,
+    fcmUnregisteredDetail,
+    [null, 'UNREGISTERED'],
+    [{ ...fcmUnregisteredDetail, '@type': 'example.invalid/FcmError' }],
+    [{ ...fcmUnregisteredDetail, errorCode: 'NOT_FOUND' }],
+  ]) {
+    const result = translateFcmError({
+      code: ambiguousCode,
+      httpResponse: {
+        status: 404,
+        data: { error: { status: 'NOT_FOUND', details } },
+      },
+    });
+    assert.deepEqual(result, unconfirmed);
+  }
+  assert.deepEqual(
+    translateFcmError({
+      code: ambiguousCode,
+      httpResponse: {
+        status: 404,
+        get data() {
+          throw new Error('private non-JSON response body');
+        },
+      },
+    }),
+    unconfirmed,
+  );
+});
+test('controlled FCM SDK: inline account fan-out retires only the explicitly invalid installation', async () => {
+  const { FcmPushService } = await loaders.get('postgres')!<FcmRuntime>(
+    'modules/push/fcm-push.service',
+  );
+  const rejectedToken = `fcm-${randomUUID()}`;
+  const acceptedToken = `fcm-${randomUUID()}`;
+  let details: unknown[] = [];
+  const sent: string[] = [];
+  const fcm = new FcmPushService(undefined, {
+    clock: () => now,
+    messaging: {
+      async send(input) {
+        const { token } = input as { token: string };
+        sent.push(token);
+        if (token === rejectedToken)
+          throw {
+            code: 'messaging/registration-token-not-registered',
+            httpResponse: { status: 404, data: { error: { details } } },
+          };
+        return 'projects/test/messages/accepted';
+      },
+    },
+  });
+  const h = harness('postgres', { senders: { fcm } }),
+    first = h.enroll(actor()),
+    sibling = h.enroll(actor(randomUUID(), 1, first.accountId));
+  const rejected = await h.register(first, 'ordinary', rejectedToken);
+  const accepted = await h.register(sibling, 'ordinary', acceptedToken);
+  const delivery = () =>
+    h.service.notifyAccount(first.accountId, message(), now);
+  const acceptedOutcome = {
+    status: 'accepted',
+    reference: 'projects/test/messages/accepted',
+  };
+
+  const unconfirmed = await delivery();
+  assert.deepEqual(
+    unconfirmed.map(({ destinationId, outcome }) => [destinationId, outcome]),
+    [
+      [
+        rejected.id,
+        {
+          status: 'rejected',
+          code: 'FCM_DESTINATION_UNCONFIRMED',
+          invalidDestination: false,
+        },
+      ],
+      [accepted.id, acceptedOutcome],
+    ],
+  );
+  assert.deepEqual(await h.service.list(first), [rejected]);
+  assert.deepEqual(await h.service.list(sibling), [accepted]);
+
+  details = [fcmUnregisteredDetail];
+  const confirmed = await delivery();
+  assert.deepEqual(
+    confirmed.map(({ destinationId, outcome }) => [destinationId, outcome]),
+    [
+      [
+        rejected.id,
+        {
+          status: 'rejected',
+          code: 'FCM_INVALID_DESTINATION',
+          invalidDestination: true,
+        },
+      ],
+      [accepted.id, acceptedOutcome],
+    ],
+  );
+  assert.deepEqual(sent, [
+    rejectedToken,
+    acceptedToken,
+    rejectedToken,
+    acceptedToken,
+  ]);
+  assert.deepEqual(await h.service.list(first), []);
+  assert.deepEqual(await h.service.list(sibling), [accepted]);
 });
 test('controlled loopback APNs HTTP2: purpose headers, JWT, retry-after, invalid timestamp and post-send disconnect', async () => {
   const load = loaders.get('postgres')!;
@@ -949,12 +1086,11 @@ test('client and HTTP boundary: no VoIP self route, no token echo or raw respons
     /const purpose = z.enum\(\['ordinary', 'background'\]\)/,
   );
   // Exercise the generated client against a controlled Fetch peer; no external requests.
-  const source = await readFile(
-    'templates/runtime/common/clients/push-client.mjs',
-    'utf8',
-  );
   const { pushClient } = (await import(
-    `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
+    new URL(
+      '../templates/runtime/common/clients/push-client.mjs',
+      import.meta.url,
+    ).href
   )) as {
     pushClient(options: Record<string, unknown>): {
       register(input: Record<string, string>): Promise<unknown>;

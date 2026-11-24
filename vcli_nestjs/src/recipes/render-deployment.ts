@@ -1,6 +1,8 @@
 import type { ProjectConfig, RenderedFile } from '../contracts.js';
 import { file, json } from './bundle.js';
 import type { EnvironmentContribution } from './render-config.js';
+import { diagnosticScriptPaths } from './render-diagnostics.js';
+import { selection } from './selection.js';
 import { describeServices, serviceImages } from './service-plan.js';
 import type { ServicePlan, ServicePlanOptions } from './service-plan-types.js';
 
@@ -30,7 +32,11 @@ export function serviceEnvironment(
   return values;
 }
 
-function dockerfile(plan: ServicePlan): string {
+function dockerfile(
+  plan: ServicePlan,
+  scripts: readonly string[],
+  hasAuth: boolean,
+): string {
   return `# Project-root context; commit the install-links package lock first.
 FROM ${serviceImages.node} AS build
 WORKDIR /app
@@ -38,17 +44,16 @@ ARG VCLI_SOURCE_COMMIT
 COPY . .
 RUN npm ci --install-links --no-audit --no-fund
 RUN npm run build && if [ -n "$VCLI_SOURCE_COMMIT" ]; then node scripts/write-build-metadata.mjs --source-commit "$VCLI_SOURCE_COMMIT"; fi
-RUN npm prune --omit=dev --install-links --no-audit --no-fund && test ! -e node_modules/@vcli/cli${plan.services[0]!.environment.some((field) => field.key === 'SESSION_TTL_SECONDS') ? ' && test -d node_modules/@vcli/auth-runtime && test ! -L node_modules/@vcli/auth-runtime' : ''}
-RUN mkdir -p /runtime-assets/migrations /runtime-assets/scripts && if [ -d migrations ]; then cp -R migrations/. /runtime-assets/migrations/; fi${plan.volumes.some((volume) => volume.id === 'app-evidence') ? ' && for asset in scripts/diagnostics-*.mjs; do if [ -f "$asset" ]; then cp "$asset" /runtime-assets/scripts/; fi; done' : ''}
-FROM ${serviceImages.node} AS runtime
+RUN npm prune --omit=dev --install-links --no-audit --no-fund && test ! -e node_modules/@vcli/cli${hasAuth ? ' && test -d node_modules/@vcli/auth-runtime && test ! -L node_modules/@vcli/auth-runtime' : ''}
+RUN mkdir -p /runtime-assets/migrations && if [ -d migrations ]; then cp -R migrations/. /runtime-assets/migrations/; fi
+${scripts.length ? `RUN mkdir -p /runtime-assets/scripts && for asset in ${scripts.join(' ')}; do if [ -f "$asset" ]; then cp "$asset" /runtime-assets/scripts/; fi; done\n` : ''}FROM ${serviceImages.node} AS runtime
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=3100
 WORKDIR /app
 COPY --from=build --chown=node:node /app/package.json ./package.json
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /runtime-assets/migrations ./migrations
-COPY --from=build --chown=node:node /runtime-assets/scripts ./scripts
-RUN install -d -m 0700 -o node -g node /app/var${plan.volumes.map((volume) => ' ' + volume.containerPath).join('')}
+${scripts.length ? 'COPY --from=build --chown=node:node /runtime-assets/scripts ./scripts\n' : ''}RUN install -d -m 0700 -o node -g node /app/var${plan.volumes.map((volume) => ' ' + volume.containerPath).join('')}
 USER node
 EXPOSE 3100
 STOPSIGNAL SIGTERM
@@ -134,7 +139,14 @@ export function deploymentFiles(
   if (plan.target === 'local') throw new Error('DEPLOYMENT_SELECTION_REQUIRED');
   const base = `ops/deploy/${plan.target}`;
   const files = [
-    file('ops/Dockerfile', dockerfile(plan)),
+    file(
+      'ops/Dockerfile',
+      dockerfile(
+        plan,
+        diagnosticScriptPaths(config),
+        Boolean(selection(config, 'auth')),
+      ),
+    ),
     file(
       '.dockerignore',
       `# Only build inputs; never private environment/keys/evidence.

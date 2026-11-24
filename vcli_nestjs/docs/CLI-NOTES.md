@@ -1,6 +1,6 @@
 # Functional owned notes example
 
-`example.notes` is the explicit `notes` recipe, with empty options and required `foundation`, `database` and `auth` families. Realtime is optional. This is the frozen functional example from [the baseline](CLI-BASELINE.md), separate from unfinished name-only scaffolds. The recipe, CLI registration, API preset and configured consumer seam are implemented. Packed local/Firebase x both-database journeys and prepared real native owner checks passed; exact evidence and external limits are in [CLI verification](CLI-VERIFICATION.md). Historical reference evidence is not generated notes evidence.
+`example.notes` is the explicit `notes` recipe, with empty options and required `foundation`, `database` and `auth` families. Select full local auth or Firebase for its session-scoped ownership checks. Realtime is optional. Packed full-local/Firebase journeys on both databases and prepared real native owner checks passed. [Verification](CLI-VERIFICATION.md)
 
 ## Integration contract
 
@@ -9,13 +9,14 @@
 - Common: `src/modules/notes/notes.controller.ts`, `notes-input.ts`, `notes-result.ts`, `notes-authority.ts` and the feature `README.md`.
 - Selected MongoDB or PostgreSQL: `src/modules/notes/notes.entity.ts`, `notes.service.ts`, `notes.module.ts` and `initialize-notes.ts`.
 - Client: `clients/notes-client.mjs`.
+- With private Media: `notes-image.ts` and the selected native `initialize-notes-image.ts`. The module imports `MediaModule` and uses its exported `MediaService`.
 - Without realtime: the existing neutral `src/core/realtime/event-publisher.ts`. With realtime, that recipe supplies the file, avoiding a duplicate path. No transport service or client is invented.
 
 There are no new environment fields, dependencies, external assets or SQL files. The selected native SDK and existing Nest/Swagger/Zod dependencies suffice. Only one native implementation is emitted; the installed generator carries both template variants.
 
-`createNotesRuntime(config, database, authority, publisher?)` is exported from the selected `src/modules/notes/notes.module.ts`. Its arguments are `AppConfig`, the caller-owned selected `MongoDatabase` or `PostgresDatabase`, neutral `PrincipalAuthority` and optional `EventPublisher`. It validates schema availability and returns `{ module }`; it never opens/closes a database, starts a worker, initializes schema or owns a shutdown step. Configure realtime first when selected and pass its publisher. The ordinary `NotesModule.register(authority, service)` imports configured `HttpSecurityModule`, provides `NotesService` and exports that service. A consumer must explicitly import the named configured notes module handle; root sibling imports provide no implicit visibility.
+`createNotesRuntime(config, database, authority, publisher?)` is exported from the selected `src/modules/notes/notes.module.ts`. Its arguments are `AppConfig`, the caller-owned selected `MongoDatabase` or `PostgresDatabase`, neutral `PrincipalAuthority` and optional `EventPublisher`. It checks schema availability and returns `{ bindings }` for application bootstrap. The caller owns the database connection and supplies the selected realtime publisher when available. `NotesModule` imports `HttpSecurityModule` and exports `NotesService`. A consumer imports `NotesModule` in its own module to inject `NotesService`.
 
-Coordinator integration: register `example.notes` under family `notes` requiring foundation/database/auth; add `--notes`, select it in the API preset, keep minimal empty, invoke `notesFiles`, compose `createNotesRuntime` with the already selected database/authority and optional realtime publisher, add its module to generated imports and `ConfiguredCapabilities.notes`, and update selected docs/OpenAPI guidance. The notes worker does not edit CLI/catalog/config/package/project composition. `render-scaffold.ts` reserves `notes` and maps `uses:['notes']` to injectable `NotesService` and an explicit configured consumer import.
+Select Notes with `--notes` or the `api` preset with full local auth or Firebase. The generator invokes `notesFiles`, composes `createNotesRuntime` with the selected database, authority and optional realtime publisher, and adds `NotesModule` to the imports of `VcliAppModule`. `render-scaffold.ts` reserves `notes` and maps `--use notes` to an explicit `NotesModule` import and an injected `NotesService`.
 
 ## Persistence and release
 
@@ -23,7 +24,7 @@ Both variants inherit their selected native `BaseRepository<Note>`. Their sole n
 
 `initializeNotes(database): Promise<void>` is the explicit owner initializer in each variant. MongoDB creates/configures the collection and index. PostgreSQL uses the caller's native transaction context and a transaction-scoped advisory lock for preserving `CREATE ... IF NOT EXISTS` DDL. Initialization is not application boot behavior. The selected `assertNotesInitialized(database)` performs a read-only availability check; the root release ledger provides overall release readiness.
 
-The finite `render-schema.ts` contribution adds component `notes`, version 1, only when selected. Its logical digest includes the selected `initialize-notes.ts` and `notes.entity.ts`; no unselected import is emitted. The initializer callback opens the selected database with `openDatabase(config,false)`, awaits `initializeNotes(database)` and closes that callback-owned connection in `finally`. Existing owners, versions, digests and realtime component IDs remain unchanged. Manifest and callback order agree, including full selected profiles.
+The `render-schema.ts` contribution adds component `notes`, version 1, only when selected. Its digest includes the selected `initialize-notes.ts` and baseline `notes.entity.ts`. When Notes and private Media are both selected, the release applies `notes.image` version 1 after the baseline Notes component. The MongoDB step extends its current collection validator with an optional `imageId`. The PostgreSQL step adds a nullable `image_id` column if missing. Existing Notes records and the baseline Notes digest are preserved. Each initializer opens and closes its own selected database connection.
 
 ## HTTP and service behavior
 
@@ -34,10 +35,16 @@ All routes require the existing verified principal guard. The application retain
 | `POST /api/notes`         | Strict JSON `{title, body?}`. Trim title, require 1–120 units; body defaults to `''` and is bounded to 10000 units. Server supplies UUIDv4, time and operation correlation outside retry callbacks. Success is HTTP 201 `{note, notification}`. |
 | `GET /api/notes?limit=20` | Only `limit` is allowed, a decimal integer from 1 to 100, default 20. Return `{items,truncated}` ordered by `createdAt DESC`, then `id DESC`; read at most `limit+1` records.                                                                   |
 | `GET /api/notes/:id`      | UUIDv4 note ID; owner-scoped lookup. Missing and foreign records return identical HTTP 404 `NOTE_NOT_FOUND`.                                                                                                                                    |
+| `PATCH /api/notes/:id`    | Strict JSON with at least one editable field. Omitted fields retain their values. Returns the updated note with HTTP 200.                                                                                                                       |
+| `DELETE /api/notes/:id`   | Deletes the owned note and returns HTTP 204 with an empty body.                                                                                                                                                                                 |
 
 String limits preserve the reviewed reference's UTF-16 code-unit bounds; Unicode is preserved without normalization or truncation. This is explicit because the pinned Zod's ordinary string length checks count code points. Both HTTP validation and owner service validation apply the reference bounds. Hostile HTML/SQL-looking text remains literal JSON data, never markup or interpolated SQL. Owner, filter, ID, timestamp and native model input are rejected at the HTTP boundary.
 
-`NotesService.createOwned(principal, draft, eventId)`, `listOwned(principal, limit=20)` and `getOwned(principal, id)` are the deliberate owner operations. The service derives ownership from the principal and explicitly maps the five public note fields. Returned records share no persistent object references. Native repository methods remain internal application capabilities; they are not generic HTTP CRUD.
+`NotesService` exposes `createOwned`, `listOwned`, `getOwned`, `editOwned`, and `removeOwned`. The service derives ownership from the verified principal and explicitly maps public note fields. PATCH and DELETE use an owner-scoped native write. Missing and foreign records return identical HTTP 404 `NOTE_NOT_FOUND` on read, edit, and delete. Returned records share no persistent object references.
+
+When private Media is selected alongside Notes, POST and PATCH also accept `imageId` as an owned finalized upload UUID or `null`. The attachment checks the first bytes for a PNG, JPEG, GIF, or WebP signature through the Media service. Missing, unfinished, and foreign uploads return 404 `MEDIA_NOT_FOUND`, and unsupported signatures return 400 `INVALID_NOTE_IMAGE`. Notes without an image return `imageId: null` in this selection. Detach with `imageId: null`. Detaching, replacing an image, and deleting the note preserve the upload until removed through the Media API.
+
+Select both capabilities at init with `--notes --media --storage local`, or add both while introducing Notes to an existing project. Previously generated Notes source is developer-owned. If you add Media to a project that already owns its Notes controllers and services, adapt those files explicitly to expose attachment support.
 
 Each operation rechecks `PrincipalAuthority.current(sessionId)` before database work and compares account, session, installation, installation generation and expiry. A denied or rebound principal cannot start that operation. This bounds authority use to one already admitted operation per request: revocation can race with that operation's database I/O or response, and cannot recall it. There is no strong revocation, global request-count or wall-clock cancellation guarantee, cached cross-request lease, or queued notes mutation.
 
@@ -52,8 +59,10 @@ Import `createNotesClient` from `clients/notes-client.mjs`, supply the API origi
 ```js
 const notes = createNotesClient({ baseUrl: apiOrigin, accessToken });
 const saved = await notes.create({ title: 'Remember', body: 'Private text' });
+const edited = await notes.edit(saved.note.id, { title: 'Remember tomorrow' });
 const page = await notes.list(20);
-const record = await notes.get(saved.note.id);
+const record = await notes.get(edited.id);
+await notes.remove(record.id);
 ```
 
 The client performs one request per operation and never retries creation implicitly. It treats notification uncertainty as advisory and does not invent a second auth protocol or transport.

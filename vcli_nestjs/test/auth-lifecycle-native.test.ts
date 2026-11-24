@@ -2,8 +2,10 @@ import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { test } from 'node:test';
+import { setTimeout } from 'node:timers/promises';
+import { createClient } from '@redis/client';
 import { identityFixture } from './auth-lifecycle-fixture.ts';
 
 /** Root supplies an already migrated, isolated URL; this suite never provisions or migrates. */
@@ -59,9 +61,6 @@ for (const database of ['mongodb', 'postgres'] as const) {
           );
           const { InstallationLifecycle } = await load(
             'modules/identity/installation-lifecycle.service',
-          );
-          const { IdentityRateLimits } = await load(
-            'modules/identity/identity-rate-limits.service',
           );
           const facts = await load('modules/identity/secret-facts');
           const accounts = new AccountService(db),
@@ -408,72 +407,6 @@ for (const database of ['mongodb', 'postgres'] as const) {
             ),
             null,
           );
-          const rates = new IdentityRateLimits(db, identities),
-            rateKey = facts.secretHash(marker);
-          const rateResults = await Promise.allSettled(
-            Array.from({ length: 5 }, () =>
-              rates.spend([{ key: rateKey, limit: 3 }], now),
-            ),
-          );
-          assert.equal(
-            rateResults.filter((row) => row.status === 'fulfilled').length,
-            3,
-          );
-          const childSource = `
-          const root=process.env.VCLI_IDENTITY_FIXTURE_ROOT;
-          const database=process.env.VCLI_IDENTITY_TEST_DATABASE;
-          const { [database==='mongodb'?'MongoDatabase':'PostgresDatabase']:Database }=await import(root+'core/database/'+(database==='mongodb'?'mongo':'postgres')+'-database.js');
-          const {IdentityService}=await import(root+'modules/identity/identity.service.js');
-          const {IdentityRateLimits}=await import(root+'modules/identity/identity-rate-limits.service.js');
-          const db=await Database.connect(process.env.TEST_DATABASE_URL,true);
-          try {const rates=new IdentityRateLimits(db,new IdentityService(db));let accepted=0;
-            for(let index=0;index<2;index++){try{await rates.spend([{key:process.env.VCLI_IDENTITY_RATE_KEY,limit:3}],Number(process.env.VCLI_IDENTITY_RATE_NOW));accepted++;}catch(error){if(error.code!=='RATE_LIMITED')throw error;}}
-            process.stdout.write(String(accepted));
-          }finally{await db.close();}
-        `;
-          const peer = () =>
-            new Promise<number>((resolve, reject) => {
-              const child = spawn(
-                process.execPath,
-                ['--input-type=module', '-e', childSource],
-                {
-                  env: {
-                    ...process.env,
-                    TEST_DATABASE_URL: url,
-                    VCLI_IDENTITY_TEST_DATABASE: database,
-                    VCLI_IDENTITY_FIXTURE_ROOT: pathToFileURL(
-                      join(load.directory, 'out') + '/',
-                    ).href,
-                    VCLI_IDENTITY_RATE_KEY: facts.secretHash(
-                      marker + '-two-process',
-                    ),
-                    VCLI_IDENTITY_RATE_NOW: String(now),
-                  },
-                  stdio: ['ignore', 'pipe', 'pipe'],
-                },
-              );
-              let output = '';
-              child.stdout.on('data', (chunk) => {
-                output += String(chunk);
-              });
-              child.stderr.resume();
-              child.on('error', () =>
-                reject(new Error('NATIVE_RATE_PEER_START_FAILED')),
-              );
-              child.on('exit', (code) => {
-                if (code === 0 && /^[0-2]$/u.test(output))
-                  resolve(Number(output));
-                else reject(new Error('NATIVE_RATE_PEER_FAILED'));
-              });
-            });
-          assert.equal(
-            (await Promise.all([peer(), peer()])).reduce(
-              (total, value) => total + value,
-              0,
-            ),
-            3,
-            'durable rate budget is shared across independent processes',
-          );
           // Reauthentication with the proved rotated installation allows explicit identity deletion.
           let final;
           if (profile === 'firebase') {
@@ -587,3 +520,147 @@ for (const database of ['mongodb', 'postgres'] as const) {
     );
   }
 }
+
+const redisUrl = process.env.VCLI_IDENTITY_REDIS_TEST_URL;
+test(
+  'native Redis identity limiter shares bounded, expiring budgets across scopes and processes',
+  { skip: !redisUrl },
+  async () => {
+    assert.ok(redisUrl);
+    const load = await identityFixture('postgres');
+    const { RedisIdentityRateStore } = await load(
+      'modules/identity/redis-identity-rate-store',
+    );
+    const { secretHash } = await load('modules/identity/secret-facts');
+    const project = 'native-identity-' + randomUUID();
+    const namespace = project + ':test';
+    const namespaceHash = createHash('sha256').update(namespace).digest('hex');
+    const key = (scope: string) =>
+      `vcli:identity-rate:{${namespaceHash}}:${scope}`;
+    const peerScope = { key: secretHash('peer'), limit: 3 };
+    const accountScope = { key: secretHash('account'), limit: 5 };
+    const sharedScope = { key: secretHash('shared'), limit: 3 };
+    const rates = new RedisIdentityRateStore(redisUrl, namespace);
+    const otherProject = new RedisIdentityRateStore(
+      redisUrl,
+      project + '-other:test',
+    );
+    const otherEnvironment = new RedisIdentityRateStore(
+      redisUrl,
+      project + ':development',
+    );
+    const observer = createClient({
+      url: redisUrl,
+      socket: { connectTimeout: 1000, reconnectStrategy: false },
+    }).on('error', () => {});
+    try {
+      await observer.connect().catch(() => {
+        throw new Error('NATIVE_RATE_OBSERVER_CONNECT_FAILED');
+      });
+      const time = await observer.sendCommand(['TIME']);
+      assert.ok(Array.isArray(time));
+      const remainingMs =
+        60000 - (Number(time[0]) % 60) * 1000 - Number(time[1]) / 1000;
+      if (remainingMs < 8000) await setTimeout(remainingMs + 50);
+
+      const attempts = await Promise.allSettled(
+        Array.from({ length: 5 }, () => rates.spend([peerScope, accountScope])),
+      );
+      assert.equal(
+        attempts.filter((row) => row.status === 'fulfilled').length,
+        3,
+      );
+      for (const attempt of attempts)
+        if (attempt.status === 'rejected') {
+          assert.equal(attempt.reason.code, 'RATE_LIMITED');
+          assert.equal(attempt.reason.status, 429);
+        }
+      await assert.rejects(rates.spend([accountScope]), {
+        code: 'RATE_LIMITED',
+        status: 429,
+      });
+      assert.deepEqual(
+        await observer.mGet([key(peerScope.key), key(accountScope.key)]),
+        ['3', '5'],
+      );
+      const [peerTtl, accountTtl] = await Promise.all([
+        observer.pTTL(key(peerScope.key)),
+        observer.pTTL(key(accountScope.key)),
+      ]);
+      assert.ok(peerTtl > 0 && peerTtl <= 60000);
+      assert.ok(accountTtl > 0 && Math.abs(peerTtl - accountTtl) <= 10);
+      await Promise.all([
+        otherProject.spend([peerScope]),
+        otherEnvironment.spend([peerScope]),
+      ]);
+
+      const childSource = `
+        const {RedisIdentityRateStore} = await import(process.env.VCLI_IDENTITY_RATE_STORE_MODULE);
+        const store = new RedisIdentityRateStore(process.env.VCLI_IDENTITY_REDIS_TEST_URL, process.env.VCLI_IDENTITY_RATE_NAMESPACE);
+        let accepted = 0;
+        try {
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              await store.spend([{key: process.env.VCLI_IDENTITY_RATE_KEY, limit: 3}]);
+              accepted++;
+            } catch (error) {
+              if (error.code !== 'RATE_LIMITED' || error.status !== 429) throw error;
+            }
+          }
+          process.stdout.write(String(accepted));
+        } finally {
+          store.close();
+        }
+      `;
+      const peer = () =>
+        new Promise<number>((resolve, reject) => {
+          const child = spawn(
+            process.execPath,
+            ['--input-type=module', '-e', childSource],
+            {
+              env: {
+                ...process.env,
+                VCLI_IDENTITY_RATE_STORE_MODULE: pathToFileURL(
+                  join(
+                    load.directory,
+                    'out/modules/identity/redis-identity-rate-store.js',
+                  ),
+                ).href,
+                VCLI_IDENTITY_RATE_NAMESPACE: namespace,
+                VCLI_IDENTITY_RATE_KEY: sharedScope.key,
+              },
+              stdio: ['ignore', 'pipe', 'ignore'],
+              timeout: 5000,
+            },
+          );
+          let output = '';
+          child.stdout.on('data', (chunk) => {
+            output += String(chunk);
+          });
+          child.on('error', () =>
+            reject(new Error('NATIVE_RATE_PEER_START_FAILED')),
+          );
+          child.on('close', (code) => {
+            if (code === 0 && /^[0-2]$/u.test(output)) resolve(Number(output));
+            else reject(new Error('NATIVE_RATE_PEER_FAILED'));
+          });
+        });
+      assert.equal(
+        (await Promise.all([peer(), peer()])).reduce(
+          (total, value) => total + value,
+          0,
+        ),
+        3,
+      );
+      await assert.rejects(rates.spend([sharedScope]), {
+        code: 'RATE_LIMITED',
+        status: 429,
+      });
+    } finally {
+      rates.close();
+      otherProject.close();
+      otherEnvironment.close();
+      if (observer.isOpen) observer.destroy();
+    }
+  },
+);

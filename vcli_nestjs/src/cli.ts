@@ -14,6 +14,8 @@ import { registerDeploymentCommands } from './commands/deployment-commands.js';
 import { registerGenerationCommands } from './commands/generation-commands.js';
 import { registerProjectCommands } from './commands/project-commands.js';
 import { registerMaintenanceCommands } from './commands/maintenance-commands.js';
+import { registerFirebaseCommands } from './commands/firebase-commands.js';
+import { registerOpenApiCommands } from './commands/openapi-commands.js';
 
 interface GlobalOptions {
   json?: boolean;
@@ -86,6 +88,8 @@ export async function runCli(argv: string[]): Promise<void> {
   registerGenerationCommands(program, runtime);
   registerProjectCommands(program, runtime, () => ({ ...process.env }));
   registerMaintenanceCommands(program, runtime);
+  registerFirebaseCommands(program, runtime);
+  registerOpenApiCommands(program, runtime);
   try {
     await program.parseAsync(argv);
   } catch (error: unknown) {

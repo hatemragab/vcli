@@ -10,6 +10,7 @@ export type Identity = Readonly<{
   methods: readonly string[];
   cleanupPending: boolean;
 }>;
+// vcli:begin email-actions
 export type Action = Readonly<{
   hash: string;
   accountId: string;
@@ -18,6 +19,7 @@ export type Action = Readonly<{
   expiresAt: number;
   consumedAt: number | null;
 }>;
+// vcli:end email-actions
 const options = {
   autoCreate: false,
   autoIndex: false,
@@ -35,8 +37,9 @@ export const identitySchema = new Schema<Identity>(
     credentialVersion: Number,
     enrollmentCutoff: Number,
   },
-  { ...options, collection: 'ref_identities' },
+  { ...options, collection: 'identities' },
 );
+// vcli:begin email-actions
 export const actionSchema = new Schema<Action>(
   {
     hash: String,
@@ -46,18 +49,12 @@ export const actionSchema = new Schema<Action>(
     expiresAt: Number,
     consumedAt: { type: Number, default: null },
   },
-  { ...options, collection: 'ref_actions' },
+  { ...options, collection: 'actions' },
 );
-export const rateSchema = new Schema<{
-  _id: string;
-  key: string;
-  window: number;
-  used: number;
-}>(
-  { _id: String, key: String, window: Number, used: Number },
-  { ...options, collection: 'ref_identity_rates' },
-);
+// vcli:end email-actions
 identitySchema.add(
   new Schema({ _id: String, revision: { type: Number, default: 0 } }),
 );
+// vcli:begin email-actions
 actionSchema.add(new Schema({ _id: String }));
+// vcli:end email-actions

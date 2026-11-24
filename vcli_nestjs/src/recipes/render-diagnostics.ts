@@ -2,12 +2,53 @@ import type { ProjectConfig, RenderedFile } from '../contracts.js';
 import { bundled, file } from './bundle.js';
 import { selection } from './selection.js';
 
+const localMcpScript = 'scripts/diagnostics-mcp.mjs';
+const remoteReader = 'restricted-remote-read';
+
+export function diagnosticScriptPaths(config: ProjectConfig): string[] {
+  const options = config.capabilities.diagnostics?.options;
+  const paths: string[] = [];
+  if (options?.mcp) paths.push(localMcpScript);
+  if (options?.reader === remoteReader) {
+    paths.push(
+      'scripts/diagnostics-private-profile.mjs',
+      'scripts/diagnostics-remote-backend.mjs',
+    );
+    if (options.mcp) paths.push('scripts/diagnostics-remote-mcp.mjs');
+  }
+  return paths;
+}
+
+const producerDefinitions = [
+  {
+    source: 'workers',
+    name: 'JobDiagnosticsService',
+    arg: 'jobs',
+    path: 'job',
+  },
+  {
+    source: 'database',
+    name: 'DatabaseDiagnosticsService',
+    arg: 'database',
+    path: 'database',
+  },
+  {
+    source: 'infrastructure',
+    name: 'InfrastructureDiagnosticsService',
+    arg: 'infrastructure',
+    path: 'infrastructure',
+  },
+];
+
 export async function diagnosticsFiles(
   config: ProjectConfig,
 ): Promise<RenderedFile[]> {
   const options = config.capabilities.diagnostics!.options;
   const sources = (options.sources ?? ['application']) as string[];
-  const remote = options.reader === 'restricted-remote-read';
+  const remote = options.reader === remoteReader;
+  const producerBindings = producerDefinitions.filter(({ source }) =>
+    sources.includes(source),
+  );
   const paths = [
     'diagnostic-reader.service.ts',
     'diagnostic-reader.ts',
@@ -18,15 +59,13 @@ export async function diagnosticsFiles(
     'test-result-schema.ts',
     'source-evidence.service.ts',
     ...(options.testCapture ? ['test-evidence.service.ts'] : []),
-    ...(options.mcp
-      ? ['diagnostics-mcp.service.ts', 'diagnostic-query.ts']
-      : []),
+    ...(options.mcp ? ['diagnostics-mcp.service.ts'] : []),
+    ...(options.mcp || remote ? ['diagnostic-query.ts'] : []),
     ...(remote
       ? [
           'remote-diagnostic-profile.ts',
           'remote-diagnostic-reader.ts',
           'remote-diagnostic-server.ts',
-          ...(!options.mcp ? ['diagnostic-query.ts'] : []),
         ]
       : []),
   ];
@@ -35,41 +74,28 @@ export async function diagnosticsFiles(
   );
   files.push(await bundled('src/core/diagnostics/source-contracts.ts'));
   files.push(await bundled('src/core/diagnostics/evidence-bounds.ts'));
-  const producers = [
-    ...(sources.includes('workers') ? ['job-diagnostics.service.ts'] : []),
-    ...(sources.includes('database')
-      ? ['database-diagnostics.service.ts']
-      : []),
-    ...(sources.includes('infrastructure')
-      ? ['infrastructure-diagnostics.service.ts']
-      : []),
-  ];
-  for (const path of producers)
-    files.push(await bundled('src/core/diagnostics/' + path));
-  if (options.mcp) {
-    const launcher = await bundled('scripts/diagnostics-mcp.mjs');
-    launcher.content = launcher.content.replace(
-      "process.env.EVIDENCE_SOURCES ?? 'application'",
-      `process.env.EVIDENCE_SOURCES ?? '${sources.join(',')}'`,
+  for (const { path } of producerBindings)
+    files.push(
+      await bundled(`src/core/diagnostics/${path}-diagnostics.service.ts`),
     );
+  for (const path of diagnosticScriptPaths(config)) {
+    const launcher = await bundled(path);
+    if (path === localMcpScript)
+      launcher.content = launcher.content.replace(
+        "process.env.EVIDENCE_SOURCES ?? 'application'",
+        `process.env.EVIDENCE_SOURCES ?? '${sources.join(',')}'`,
+      );
     files.push(launcher);
   }
   if (remote) {
-    for (const path of [
-      'scripts/diagnostics-private-profile.mjs',
-      'scripts/diagnostics-remote-backend.mjs',
-      ...(options.mcp ? ['scripts/diagnostics-remote-mcp.mjs'] : []),
-      'ops/diagnostics/remote-client.example.json',
+    const client = await bundled('ops/diagnostics/remote-client.example.json');
+    const backend = await bundled(
       'ops/diagnostics/remote-backend.example.json',
-    ]) {
-      const asset = await bundled(path);
-      if (path.endsWith('remote-backend.example.json')) {
-        const profile: Record<string, unknown> = JSON.parse(asset.content);
-        profile.sources = sources;
-        asset.content = JSON.stringify(profile, null, 2) + '\n';
-      }
-      files.push(asset);
-    }
+    );
+    const profile: Record<string, unknown> = JSON.parse(backend.content);
+    profile.sources = sources;
+    backend.content = JSON.stringify(profile, null, 2) + '\n';
+    files.push(client, backend);
   }
   if (options.vector) {
     const vector = await bundled('ops/diagnostics/vector.yaml');
@@ -123,42 +149,27 @@ export async function diagnosticsFiles(
       'generated-api',
       config.project.name,
     );
-  const producerBindings = [
-    ...(sources.includes('workers')
-      ? [{ name: 'JobDiagnosticsService', arg: 'jobs', path: 'job' }]
-      : []),
-    ...(sources.includes('database')
-      ? [
-          {
-            name: 'DatabaseDiagnosticsService',
-            arg: 'database',
-            path: 'database',
-          },
-        ]
-      : []),
-    ...(sources.includes('infrastructure')
-      ? [
-          {
-            name: 'InfrastructureDiagnosticsService',
-            arg: 'infrastructure',
-            path: 'infrastructure',
-          },
-        ]
-      : []),
-  ];
   files.push(
     file(
       'src/modules/diagnostics/diagnostics.module.ts',
-      `import {Module,type DynamicModule} from '@nestjs/common';
+      `import {Module} from '@nestjs/common';
+import {bootstrapBinding,type BootstrapBinding} from '../../core/bootstrap/bootstrap-bindings.js';
 import {DiagnosticReaderService} from './diagnostic-reader.service.js';
 import {SourceEvidenceService} from './source-evidence.service.js';
 ${options.mcp ? "import {DiagnosticsMcpService} from './diagnostics-mcp.service.js';" : ''}
 ${options.testCapture ? "import {TestEvidenceService} from './test-evidence.service.js';" : ''}
 ${producerBindings.map((binding) => `import {${binding.name}} from '../../core/diagnostics/${binding.path}-diagnostics.service.js';`).join('\n')}
-@Module({})
-export class DiagnosticsModule {
-static register(diagnostics:SourceEvidenceService,reader:DiagnosticReaderService${producerBindings.map((binding) => `,${binding.arg}:${binding.name}`).join('')}):DynamicModule {
-return {module:DiagnosticsModule,providers:[{provide:SourceEvidenceService,useValue:diagnostics},{provide:DiagnosticReaderService,useValue:reader}${producerBindings.map((binding) => `,{provide:${binding.name},useValue:${binding.arg}}`).join('')}${options.testCapture ? ',{provide:TestEvidenceService,useValue:new TestEvidenceService(diagnostics)}' : ''}${options.mcp ? ',DiagnosticsMcpService' : ''}],exports:[SourceEvidenceService,DiagnosticReaderService${producerBindings.map((binding) => ',' + binding.name).join('')}${options.testCapture ? ',TestEvidenceService' : ''}${options.mcp ? ',DiagnosticsMcpService' : ''}]};}}
+const evidenceBinding=bootstrapBinding<SourceEvidenceService>(SourceEvidenceService);
+const readerBinding=bootstrapBinding<DiagnosticReaderService>(DiagnosticReaderService);
+${producerBindings.map((binding) => `const ${binding.arg}Binding=bootstrapBinding<${binding.name}>(${binding.name});`).join('\n')}
+@Module({
+  providers:[evidenceBinding.provider,readerBinding.provider${producerBindings.map((binding) => `,${binding.arg}Binding.provider`).join('')}${options.testCapture ? ',{provide:TestEvidenceService,inject:[SourceEvidenceService],useFactory:(evidence:SourceEvidenceService)=>new TestEvidenceService(evidence)}' : ''}${options.mcp ? ',DiagnosticsMcpService' : ''}],
+  exports:[SourceEvidenceService,DiagnosticReaderService${producerBindings.map((binding) => ',' + binding.name).join('')}${options.testCapture ? ',TestEvidenceService' : ''}${options.mcp ? ',DiagnosticsMcpService' : ''}],
+})
+export class DiagnosticsModule {}
+export function bindDiagnostics(diagnostics:SourceEvidenceService,reader:DiagnosticReaderService${producerBindings.map((binding) => `,${binding.arg}:${binding.name}`).join('')}):readonly BootstrapBinding[] {
+  return [evidenceBinding.bind(diagnostics),readerBinding.bind(reader)${producerBindings.map((binding) => `,${binding.arg}Binding.bind(${binding.arg})`).join('')}];
+}
 `,
     ),
   );

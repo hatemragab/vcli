@@ -243,6 +243,14 @@ export function syntheticIdentityPorts() {
       check(opts.context);
       return structuredClone(data.installations.get(id) ?? null);
     },
+    async listOwnedByIds(owner: string, ids: readonly string[], ctx: object) {
+      check(ctx);
+      return structuredClone(
+        [...data.installations.values()].filter(
+          (row) => row.accountId === owner && ids.includes(row.id),
+        ),
+      );
+    },
     async enroll(
       id: string,
       accountId: string,
@@ -311,6 +319,23 @@ export function syntheticIdentityPorts() {
       return structuredClone(
         [...data.sessions.values()].find((row) => row.secretHash === hash) ??
           null,
+      );
+    },
+    async hasInstallationRevocation(
+      owner: string,
+      installationId: string,
+      generation: number,
+      authenticatedAt: number,
+      ctx: object,
+    ) {
+      check(ctx);
+      return [...data.sessions.values()].some(
+        (row) =>
+          row.accountId === owner &&
+          row.installationId === installationId &&
+          row.installationGeneration === generation &&
+          row.revokedAt !== null &&
+          row.revokedAt >= authenticatedAt,
       );
     },
     async listActive(owner: string, now: number, ctx: object) {

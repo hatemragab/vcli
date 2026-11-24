@@ -21,7 +21,7 @@ Commands are proposed UX, not installed tools. `vcli init`, `add`, `g`, `inspect
 | Family | Choices and boundaries |
 | --- | --- |
 | Database | MongoDB and PostgreSQL. One implementation per app initially; no automatic data migration or equivalent arbitrary queries. |
-| Authentication | Firebase identity or local email/password with application JWT access tokens; application-owned accounts and independently revocable sessions. |
+| Authentication | Basic local email/password or username/password with application JWT access tokens. Full local auth and Firebase also support independently revocable application sessions. |
 | Firebase methods | Email/password, phone, Google, Apple. Generate backend integration, configuration requirements, and client/provider instructions; external consoles/signing credentials need authorized setup. |
 | Realtime | Socket.IO, Centrifugo, native WebSocket. Centrifugo includes separate service configuration and backend integration. Protocols and delivery guarantees remain explicit. |
 | Email | SMTP application mail, development capture, Firebase-managed action mail, or application delivery of Firebase action links. Firebase is not general SMTP. An HTTP mail provider is an extension proof. |
@@ -39,28 +39,28 @@ IDs preserve the original proposal's scope. Linked acceptance registers define p
 
 | Requirement | Scope | Primary acceptance registers |
 | --- | --- | --- |
-| REQ-01 | Complete NestJS starter in selected style | [01](../phases/01-project-foundation/ACCEPTANCE.md) |
-| REQ-02 | Safe addition after customization | [02](../phases/02-safe-generation/ACCEPTANCE.md), [09](../phases/09-upgrades-extensibility/ACCEPTANCE.md) |
-| REQ-03 | Feature/command/query/controller/service/DTO/repository/realtime generators | [02](../phases/02-safe-generation/ACCEPTANCE.md), [03](../phases/03-authentication-databases/ACCEPTANCE.md), [04](../phases/04-realtime/ACCEPTANCE.md) |
-| REQ-04 | Workspace JSON drives generation | [01](../phases/01-project-foundation/ACCEPTANCE.md), [02](../phases/02-safe-generation/ACCEPTANCE.md) |
-| REQ-05 | Firebase and local JWT auth | [03](../phases/03-authentication-databases/ACCEPTANCE.md) |
-| REQ-06 | Firebase email/password, phone, Google, Apple | [03](../phases/03-authentication-databases/ACCEPTANCE.md) |
-| REQ-07 | Accounts, installations, sessions, revocation, destinations | [03](../phases/03-authentication-databases/ACCEPTANCE.md), [04](../phases/04-realtime/ACCEPTANCE.md), [05](../phases/05-email-push/ACCEPTANCE.md) |
-| REQ-08 | MongoDB/PostgreSQL behavioral contracts | [03](../phases/03-authentication-databases/ACCEPTANCE.md) |
-| REQ-09 | Three realtime providers | [04](../phases/04-realtime/ACCEPTANCE.md) |
-| REQ-10 | Centrifugo service/backend integration | [04](../phases/04-realtime/ACCEPTANCE.md), [08](../phases/08-deployment/ACCEPTANCE.md) |
-| REQ-11 | SMTP and Firebase action email | [05](../phases/05-email-push/ACCEPTANCE.md) |
-| REQ-12 | FCM/APNs purpose-specific push | [05](../phases/05-email-push/ACCEPTANCE.md) |
-| REQ-13 | Local/S3/compatible storage | [06](../phases/06-storage-media/ACCEPTANCE.md) |
-| REQ-14 | Development/production environment configuration | [01](../phases/01-project-foundation/ACCEPTANCE.md), [08](../phases/08-deployment/ACCEPTANCE.md) |
-| REQ-15 | Dokploy, Coolify, CapRover | [08](../phases/08-deployment/ACCEPTANCE.md) |
-| REQ-16 | Application/infrastructure logs, Vector, Logdy | [07](../phases/07-diagnostics-ai/ACCEPTANCE.md) |
-| REQ-17 | Scoped MCP evidence | [07](../phases/07-diagnostics-ai/ACCEPTANCE.md) |
-| REQ-18 | Human/agent documentation | [01](../phases/01-project-foundation/ACCEPTANCE.md), [02](../phases/02-safe-generation/ACCEPTANCE.md) |
+| REQ-01 | Complete NestJS starter in selected style | [01](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/01-project-foundation/ACCEPTANCE.md) |
+| REQ-02 | Safe addition after customization | [02](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/02-safe-generation/ACCEPTANCE.md), [09](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/09-upgrades-extensibility/ACCEPTANCE.md) |
+| REQ-03 | Feature/command/query/controller/service/DTO/repository/realtime generators | [02](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/02-safe-generation/ACCEPTANCE.md), [03](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/03-authentication-databases/ACCEPTANCE.md), [04](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/04-realtime/ACCEPTANCE.md) |
+| REQ-04 | Workspace JSON drives generation | [01](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/01-project-foundation/ACCEPTANCE.md), [02](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/02-safe-generation/ACCEPTANCE.md) |
+| REQ-05 | Firebase and local JWT auth | [03](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/03-authentication-databases/ACCEPTANCE.md) |
+| REQ-06 | Firebase email/password, phone, Google, Apple | [03](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/03-authentication-databases/ACCEPTANCE.md) |
+| REQ-07 | Accounts, installations, sessions, revocation, destinations | [03](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/03-authentication-databases/ACCEPTANCE.md), [04](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/04-realtime/ACCEPTANCE.md), [05](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/05-email-push/ACCEPTANCE.md) |
+| REQ-08 | MongoDB/PostgreSQL behavioral contracts | [03](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/03-authentication-databases/ACCEPTANCE.md) |
+| REQ-09 | Three realtime providers | [04](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/04-realtime/ACCEPTANCE.md) |
+| REQ-10 | Centrifugo service/backend integration | [04](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/04-realtime/ACCEPTANCE.md), [08](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/08-deployment/ACCEPTANCE.md) |
+| REQ-11 | SMTP and Firebase action email | [05](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/05-email-push/ACCEPTANCE.md) |
+| REQ-12 | FCM/APNs purpose-specific push | [05](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/05-email-push/ACCEPTANCE.md) |
+| REQ-13 | Local/S3/compatible storage | [06](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/06-storage-media/ACCEPTANCE.md) |
+| REQ-14 | Development/production environment configuration | [01](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/01-project-foundation/ACCEPTANCE.md), [08](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/08-deployment/ACCEPTANCE.md) |
+| REQ-15 | Dokploy, Coolify, CapRover | [08](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/08-deployment/ACCEPTANCE.md) |
+| REQ-16 | Application/infrastructure logs, Vector, Logdy | [07](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/07-diagnostics-ai/ACCEPTANCE.md) |
+| REQ-17 | Scoped MCP evidence | [07](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/07-diagnostics-ai/ACCEPTANCE.md) |
+| REQ-18 | Human/agent documentation | [01](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/01-project-foundation/ACCEPTANCE.md), [02](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/02-safe-generation/ACCEPTANCE.md) |
 | REQ-19 | Maintainable code and honest verification | All; [policy](VERIFICATION.md) |
-| REQ-20 | Extendable recipes/providers/targets/readers | [02](../phases/02-safe-generation/ACCEPTANCE.md), [09](../phases/09-upgrades-extensibility/ACCEPTANCE.md) |
-| REQ-21 | Preserve customizations, secrets, durable data | [02](../phases/02-safe-generation/ACCEPTANCE.md), [06](../phases/06-storage-media/ACCEPTANCE.md), [08](../phases/08-deployment/ACCEPTANCE.md), [09](../phases/09-upgrades-extensibility/ACCEPTANCE.md) |
-| REQ-22 | Interactive/noninteractive workflows | [01](../phases/01-project-foundation/ACCEPTANCE.md), [02](../phases/02-safe-generation/ACCEPTANCE.md) |
+| REQ-20 | Extendable recipes/providers/targets/readers | [02](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/02-safe-generation/ACCEPTANCE.md), [09](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/09-upgrades-extensibility/ACCEPTANCE.md) |
+| REQ-21 | Preserve customizations, secrets, durable data | [02](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/02-safe-generation/ACCEPTANCE.md), [06](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/06-storage-media/ACCEPTANCE.md), [08](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/08-deployment/ACCEPTANCE.md), [09](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/09-upgrades-extensibility/ACCEPTANCE.md) |
+| REQ-22 | Interactive/noninteractive workflows | [01](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/01-project-foundation/ACCEPTANCE.md), [02](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/02-safe-generation/ACCEPTANCE.md) |
 
 ## Boundaries
 

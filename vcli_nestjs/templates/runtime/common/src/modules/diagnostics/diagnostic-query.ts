@@ -4,14 +4,6 @@ import type { DiagnosticReader } from './diagnostic-reader.js';
 import { logFilterSchema } from './diagnostic-schema.js';
 import { testResultQuerySchema } from './test-result-schema.js';
 
-export const diagnosticToolSchema = z.enum([
-  'project.describe',
-  'capabilities.list',
-  'diagnostics.status',
-  'logs.search',
-  'operations.timeline',
-  'tests.getResult',
-]);
 export const diagnosticQueries = [
   {
     name: 'project.describe',
@@ -52,6 +44,9 @@ export const diagnosticQueries = [
     schema: testResultQuerySchema,
   },
 ] as const;
+export const diagnosticToolSchema = z.enum(
+  diagnosticQueries.map(({ name }) => name),
+);
 
 export async function executeDiagnosticQuery(
   reader: DiagnosticReader,

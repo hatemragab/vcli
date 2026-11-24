@@ -2,7 +2,32 @@
 
 Private CLI `0.1.2` adds an upgrade from `0.1.1` for projects whose managed files match their project lock. A recognized `0.1.0` curated predecessor can also upgrade directly. From the built target checkout, preview with `node bin/vcli.mjs --project /path/to/app upgrade --to 0.1.2 --dry-run`. Apply with the same command without `--dry-run`, then run the project's pinned `npm exec -- vcli check`. Commit the updated app source, package lock, VCLI lock and vendored assets together.
 
+For an existing database-backed `0.1.2` app, use the built checkout containing the seeding feature and preview that same command. The plan adds the seed entry points and files to matching managed projects, and preserves the application version and recorded developer-owned scaffolds, including any previously generated seed files and registry. Resolve managed drift or a pre-existing unowned path reported by the plan before applying it. Add seed files manually beside custom features scaffolded before seed support and register them in `src/seed/custom-seeders.ts`. Rebuild the app after the update or after editing seed files. The app's generated README covers configuration and fixture prerequisites.
+
 During upgrade, VCLI updates the original generated `.gitignore` and `CLAUDE.md` if their bytes match the old templates. For customized versions, anchor the app build ignore to `/dist/` and add `@AGENTS.md` to `CLAUDE.md` while preserving local rules. A clone made before the ignore fix may lack the recorded vendored assets. Recover those exact bytes from the original project workspace, upgrade there, and commit them so subsequent clones can bootstrap. App version numbers now belong to the application, including projects whose earlier VCLI lock recorded the initial value.
+
+## Add IDE tasks to an existing project
+
+Use the built generator containing IDE task support to preview `node bin/vcli.mjs --project /path/to/app upgrade --to 0.1.2 --dry-run`. Review the plan, then apply without `--dry-run`. VCLI adds `.vscode/tasks.json` and `.run/vcli-*.run.xml` as developer-owned scaffolds where the paths are absent and have never been generated. It reports a warning when a proposed path already belongs to your project.
+
+If you already have `.vscode/tasks.json`, add the actions you want to its existing `tasks` array. This example adds Dev. Use a distinct label if you already have a task named `VCLI: Dev`.
+
+```json
+{
+  "label": "VCLI: Dev",
+  "type": "process",
+  "command": "make",
+  "args": ["dev"],
+  "options": { "cwd": "${workspaceFolder}" },
+  "problemMatcher": []
+}
+```
+
+Select the task through **Tasks: Run Task** in VS Code. In IntelliJ IDEA, enable the Makefile plugin and choose a shared configuration in the **Run** menu. A colliding IntelliJ configuration can be updated in the IDE to use the root `Makefile` and matching target. The generated README lists the action names and their Make targets.
+
+## Private development config after upgrades
+
+Fresh `init` creates a private `.env.development`. Keep the existing file when upgrading or adding a capability. Review the generated README, start newly required services, and add required settings privately. For an app using Redis auth rate limits, set `REDIS_URL` to a reachable instance and check the updated config with `npm exec -- vcli config check --config-file .env.development`. Each deployment supplies its own Redis URL and auth credentials.
 
 ## Historical 0.1.1 evidence
 

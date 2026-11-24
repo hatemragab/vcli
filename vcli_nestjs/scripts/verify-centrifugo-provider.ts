@@ -1190,15 +1190,15 @@ export async function verifyCentrifugoProvider(): Promise<ProviderReport> {
     for (const dependency of Object.keys(metadata.dependencies ?? {}))
       await copyPackage(dependency, directory);
   }
-  for (const name of ['centrifuge']) await copyPackage(name, resolve('.'));
   for (const name of [
+    'centrifuge',
     'ws',
     '@nestjs/common',
     'reflect-metadata',
     'rxjs',
     'zod',
   ])
-    await copyPackage(name, resolve('examples/reference-api-postgres'));
+    await copyPackage(name, resolve('.'));
   const owned = await readFile('scripts/verify-centrifugo-provider.ts', 'utf8');
   let source = owned.slice(
     0,

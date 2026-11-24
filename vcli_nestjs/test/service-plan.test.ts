@@ -6,8 +6,12 @@ import {
   describeServices,
   targetContracts,
 } from '../dist/recipes/service-plan.js';
-import { serviceEnvironment } from '../dist/recipes/render-deployment.js';
-import { serviceFiles } from '../dist/recipes/render-services.js';
+import { configuration } from '../dist/recipes/render-config.js';
+import {
+  deploymentFiles,
+  serviceEnvironment,
+} from '../dist/recipes/render-deployment.js';
+import { localCompose, serviceFiles } from '../dist/recipes/render-services.js';
 
 const fields: EnvironmentContribution[] = [
   { key: 'DATABASE_URL', required: true, secret: true },
@@ -193,7 +197,7 @@ test('external refs are explicit nonsecret identities with missing/undeclared re
   );
 });
 
-test('eligible realtime cluster uses shared native DB; only Centrifugo requires Redis', () => {
+test('eligible realtime cluster uses a shared native DB; Centrifugo also requires its Redis engine', () => {
   for (const transport of ['socket-io', 'centrifugo']) {
     const selected = config(
       'database.postgres',
@@ -220,6 +224,121 @@ test('eligible realtime cluster uses shared native DB; only Centrifugo requires 
     ) as { topology: string; services: { id: string; execution: string }[] };
     assert.equal(local.topology, 'cluster');
     assert.equal(local.services[1]!.execution, 'external');
+  }
+});
+
+test('auth Redis is external by default; opt-in Compose is a separate loopback development service', () => {
+  const selected = config('database.postgres', 'auth.local');
+  const environment = configuration(selected).fields;
+  const plan = describeServices(selected, environment);
+  const redis = plan.services.find(({ id }) => id === 'auth-redis')!;
+  assert.equal(redis.execution, 'external');
+  assert.equal(redis.image, undefined);
+  assert.deepEqual(redis.volumes, []);
+  assert.deepEqual(plan.services[0]!.dependsOn, ['database', 'auth-redis']);
+  assert.deepEqual(Object.keys(localCompose(plan).services as object), [
+    'database',
+  ]);
+
+  const composePath = 'ops/compose.redis.development.yml';
+  const defaultFiles = serviceFiles(selected, environment);
+  assert.equal(
+    defaultFiles.some(({ path }) => path === composePath),
+    false,
+  );
+  selected.capabilities.auth!.options = { redisDocker: true };
+  const optionalFiles = serviceFiles(selected, environment);
+  assert.deepEqual(
+    optionalFiles.find(({ path }) => path === 'ops/local/compose.yaml'),
+    defaultFiles.find(({ path }) => path === 'ops/local/compose.yaml'),
+  );
+  const compose = JSON.parse(
+    optionalFiles.find(({ path }) => path === composePath)!.content,
+  );
+  assert.equal(compose.name, 'sample-api-development-auth-redis');
+  assert.deepEqual(Object.keys(compose.services), ['auth-redis']);
+  const container = compose.services['auth-redis'];
+  assert.match(container.image, /^redis:\d+\.\d+\.\d+-alpine$/);
+  assert.deepEqual(container.ports, [
+    {
+      target: 6379,
+      published: '${VCLI_REDIS_PORT:-6379}',
+      host_ip: '127.0.0.1',
+      protocol: 'tcp',
+    },
+  ]);
+  assert.deepEqual(container.tmpfs, ['/data']);
+});
+
+test('production auth Redis is private and independent of the Centrifugo Redis engine', () => {
+  for (const target of ['dokploy', 'coolify', 'caprover']) {
+    const selected = config(
+      'database.postgres',
+      target === 'caprover' ? 'auth.firebase' : 'auth.local',
+      'realtime.centrifugo',
+      'deployment.' + target,
+    );
+    selected.capabilities.auth!.options = { redisDocker: true };
+    selected.capabilities.realtime!.options = { scale: 'cluster' };
+    const environment = configuration(selected).fields;
+    const plan = describeServices(selected, environment, {
+      requireExternalResources: true,
+      externalResources: {
+        database: 'native-db',
+        'auth-redis': 'auth-counters',
+        ...(target === 'caprover' ? { firebase: 'identity-project' } : {}),
+        centrifugo: 'realtime-api',
+        redis: 'realtime-engine',
+      },
+    });
+    assert.deepEqual(
+      plan.externalRequirements
+        .filter(({ id }) => id === 'auth-redis' || id === 'redis')
+        .map(({ id, resourceRef, environmentKeys }) => ({
+          id,
+          resourceRef,
+          environmentKeys,
+        })),
+      [
+        {
+          id: 'auth-redis',
+          resourceRef: 'auth-counters',
+          environmentKeys: ['REDIS_URL'],
+        },
+        {
+          id: 'redis',
+          resourceRef: 'realtime-engine',
+          environmentKeys: ['CENTRIFUGO_ENGINE_REDIS_ADDRESS'],
+        },
+      ],
+    );
+    assert.equal(
+      plan.services.find(({ id }) => id === 'auth-redis')!.execution,
+      'external',
+    );
+    assert.deepEqual(
+      plan.services.find(({ id }) => id === 'centrifugo')!.dependsOn,
+      ['api', 'redis'],
+    );
+    assert.match(serviceEnvironment(plan).REDIS_URL!, /REDIS_URL:\?/);
+    assert.equal(
+      serviceEnvironment(plan).CENTRIFUGO_ENGINE_REDIS_ADDRESS,
+      undefined,
+    );
+    const generated = deploymentFiles(selected, environment);
+    const metadata = JSON.parse(
+      generated.find(({ path }) => path.endsWith('/environment.json'))!.content,
+    );
+    assert.deepEqual(
+      metadata.fields.find(
+        ({ key }: EnvironmentContribution) => key === 'REDIS_URL',
+      ),
+      { key: 'REDIS_URL', required: true, secret: true },
+    );
+    assert.equal(
+      generated.some(({ path }) => path.includes('compose.redis')),
+      false,
+    );
   }
 });
 

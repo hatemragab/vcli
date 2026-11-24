@@ -28,7 +28,7 @@ export async function realtimeFiles(
       : 'CentrifugoConnectionService';
   const paths = [
     'realtime.service.ts',
-    'realtime-ticket.service.ts',
+    ...(socket ? [] : ['realtime-ticket.service.ts']),
     'realtime-records.ts',
     'protocol-validation.ts',
     ...(socket
@@ -176,8 +176,9 @@ ${socket ? '' : `@Post('${native ? 'tickets' : 'centrifugo-grants'}') @Header('C
   files.push(
     file(
       'src/modules/realtime/realtime.module.ts',
-      `import {Module,type DynamicModule} from '@nestjs/common';
+      `import {Module} from '@nestjs/common';
 import type {Server} from 'node:http';
+import {bootstrapBinding,type BootstrapBinding} from '../../core/bootstrap/bootstrap-bindings.js';
 import type {AppConfig} from '../../core/config/app-config.js';
 import type {${database}} from '../../core/database/${variant === 'mongodb' ? 'mongo' : 'postgres'}-database.js';
 import type {PrincipalAuthority} from '../../core/auth/principal-authority.js';
@@ -185,7 +186,7 @@ import {HttpSecurityModule} from '../../core/http/http-security.module.js';
 import {DIAGNOSTIC_EVENTS,type DiagnosticEvents} from '../../core/diagnostics/diagnostic-events.js';
 import {RealtimeController,REALTIME_CONFIG} from './realtime.controller.js';
 import {RealtimeService} from './realtime.service.js';
-import {RealtimeTicketService} from './realtime-ticket.service.js';
+${socket ? '' : "import {RealtimeTicketService} from './realtime-ticket.service.js';"}
 import {RealtimeStoreService} from './realtime-store.service.js';
 import {${protocol}} from './${socket ? 'socket-io' : native ? 'native-ws' : 'centrifugo-connection'}.service.js';
 ${
@@ -200,13 +201,26 @@ ${
     : `import {CentrifugoApiService} from './centrifugo-api.service.js';
 import {CentrifugoProxyController} from './centrifugo-proxy.controller.js';`
 }
-@Module({})
+const configBinding=bootstrapBinding<AppConfig>(REALTIME_CONFIG);
+const eventsBinding=bootstrapBinding<DiagnosticEvents>(DIAGNOSTIC_EVENTS);
+const realtimeBinding=bootstrapBinding<RealtimeService>(RealtimeService);
+const storeBinding=bootstrapBinding<RealtimeStoreService>(RealtimeStoreService);
+const protocolBinding=bootstrapBinding<${protocol}>(${protocol});
+${socket ? '' : 'const ticketsBinding=bootstrapBinding<RealtimeTicketService>(RealtimeTicketService);'}
+${socket && cluster ? 'const clusterBinding=bootstrapBinding<SocketIoClusterService>(SocketIoClusterService);' : ''}
+${socket || native ? '' : 'const apiBinding=bootstrapBinding<CentrifugoApiService>(CentrifugoApiService);'}
+@Module({
+  imports:[HttpSecurityModule],
+  controllers:[RealtimeController${socket || native ? '' : ',CentrifugoProxyController'}],
+  providers:[configBinding.provider,eventsBinding.provider,realtimeBinding.provider,storeBinding.provider,protocolBinding.provider${socket ? '' : ',ticketsBinding.provider'}${socket && cluster ? ',clusterBinding.provider' : ''}${socket || native ? '' : ',apiBinding.provider'}],
+  exports:[RealtimeService,${protocol}],
+})
 export class RealtimeModule {}
 export async function createRealtimeRuntime(config:AppConfig,authority:PrincipalAuthority,events:DiagnosticEvents,database:${database}){
 const store=new RealtimeStoreService(database);
 await store.assertInitialized();
 ${socket || native ? '' : 'const api=new CentrifugoApiService(config.realtime.centrifugoApiUrl,config.realtime.centrifugoApiKey);'}
-const tickets=new RealtimeTicketService(authority,config.realtime.ticketTtlSeconds,store);
+${socket ? '' : 'const tickets=new RealtimeTicketService(authority,config.realtime.ticketTtlSeconds,store);'}
 const realtime=new RealtimeService(authority,events,'${socket ? 'socketio' : native ? 'ws' : 'centrifugo'}',config.realtime.maxPayloadBytes);
 ${socket && cluster ? 'const cluster=new SocketIoClusterService(store,io=>configureSocketIoCluster(io,database),config.realtime.maxPayloadBytes);' : ''}
 let protocol:${protocol};
@@ -218,10 +232,10 @@ try{${
             : `protocol=new CentrifugoConnectionService(authority,tickets,store,api,config.realtime.centrifugoProxySecret);
 realtime.setPublisher((accountId,event)=>protocol.publish(accountId,event));`
       }}
-catch(error){realtime.close();tickets.close();${socket || native ? '' : 'api.close();'}throw error;}
-const module:DynamicModule={module:RealtimeModule,imports:[HttpSecurityModule.register(authority)],controllers:[RealtimeController${socket || native ? '' : ',CentrifugoProxyController'}],providers:[{provide:REALTIME_CONFIG,useValue:config},{provide:DIAGNOSTIC_EVENTS,useValue:events},{provide:RealtimeService,useValue:realtime},{provide:RealtimeTicketService,useValue:tickets},{provide:RealtimeStoreService,useValue:store},{provide:${protocol},useValue:protocol}${socket && cluster ? ',{provide:SocketIoClusterService,useValue:cluster}' : ''}${socket || native ? '' : ',{provide:CentrifugoApiService,useValue:api}'}],exports:[RealtimeService,${protocol}]};
+catch(error){realtime.close();${socket ? '' : 'tickets.close();'}${socket || native ? '' : 'api.close();'}throw error;}
+const bindings:readonly BootstrapBinding[]=[configBinding.bind(config),eventsBinding.bind(events),realtimeBinding.bind(realtime),storeBinding.bind(store),protocolBinding.bind(protocol)${socket ? '' : ',ticketsBinding.bind(tickets)'}${socket && cluster ? ',clusterBinding.bind(cluster)' : ''}${socket || native ? '' : ',apiBinding.bind(api)'}];
 let attached=false,closing:Promise<void>|undefined;
-return {module,publisher:realtime,async attach(server:Server){if(attached||closing)throw new Error('REALTIME_ALREADY_ATTACHED_OR_CLOSED');attached=true;await protocol.attach(server);},close(){return closing??=(async()=>{realtime.close();tickets.close();await protocol.close();})();}};
+return {bindings,publisher:realtime,async attach(server:Server){if(attached||closing)throw new Error('REALTIME_ALREADY_ATTACHED_OR_CLOSED');attached=true;await protocol.attach(server);},close(){return closing??=(async()=>{realtime.close();${socket ? '' : 'tickets.close();'}await protocol.close();})();}};
 }
 `,
     ),

@@ -347,7 +347,10 @@ test('selected HTTP renderer preserves immediate/reliable composition and emits 
     path.endsWith('/mail.module.ts'),
   )!.content;
   assert.ok(module.includes('new HttpMailService(config.mail)'));
-  assert.ok(module.includes('dependencies.sender??ownedSender!'));
+  assert.match(
+    module,
+    /dependencies\.sender\?\?\(ownedSender=createMailSender\(config\)\)/,
+  );
   assert.ok(module.includes('ownedSender?.close()'));
   const reliable = await mailFiles({
     ...config,

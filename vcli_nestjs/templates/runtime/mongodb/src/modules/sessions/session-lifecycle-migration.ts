@@ -3,7 +3,7 @@ import type { MongoDatabase } from '../../core/database/mongo-database.js';
 export async function migrateSessionLifecycle(
   database: MongoDatabase,
 ): Promise<void> {
-  await database.connection.db!.collection('ref_sessions').updateMany(
+  await database.connection.db!.collection('sessions').updateMany(
     { installationGeneration: { $exists: false } },
     {
       $set: {

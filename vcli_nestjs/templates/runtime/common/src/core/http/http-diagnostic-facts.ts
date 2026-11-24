@@ -15,12 +15,10 @@ export function requestFacts(
     typeof candidate.path === 'string'
       ? candidate.path.replace(/^\/api(?=\/|$)/, '')
       : undefined;
-  const route = logEventSchema.shape.route.safeParse(
-    template ? approvedRoute(template) : undefined,
-  );
+  const route = template ? approvedRoute(template) : undefined;
   const method = logEventSchema.shape.method.safeParse(request.method);
   return {
-    ...(route.success && route.data ? { route: route.data } : {}),
+    ...(route ? { route } : {}),
     ...(method.success && method.data ? { method: method.data } : {}),
   };
 }

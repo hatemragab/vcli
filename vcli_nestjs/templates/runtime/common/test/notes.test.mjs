@@ -4,7 +4,10 @@ import { test } from 'node:test';
 import { openDatabase } from '../dist/core/database/database.js';
 import { assertNotesInitialized } from '../dist/modules/notes/initialize-notes.js';
 import { assertNotesPrincipal } from '../dist/modules/notes/notes-authority.js';
-import { createNoteSchema } from '../dist/modules/notes/notes-input.js';
+import {
+  createNoteSchema,
+  editNoteSchema,
+} from '../dist/modules/notes/notes-input.js';
 import { NotesService } from '../dist/modules/notes/notes.service.js';
 
 function principal() {
@@ -21,6 +24,12 @@ test('notes reject a client-supplied owner and a mismatched session owner', asyn
   const owner = principal();
   const authority = { current: async () => owner };
   assert.ok(createNoteSchema.safeParse({ title: 'A note' }).success);
+  assert.ok(editNoteSchema.safeParse({ body: '' }).success);
+  assert.equal(editNoteSchema.safeParse({}).success, false);
+  assert.equal(
+    editNoteSchema.safeParse({ ownerId: owner.accountId }).success,
+    false,
+  );
   assert.equal(
     createNoteSchema.safeParse({ title: 'A note', ownerId: owner.accountId })
       .success,
@@ -70,6 +79,22 @@ test(
         );
         assert.deepEqual((await notes.listOwned(other)).items, []);
         await assert.rejects(notes.getOwned(other, id), {
+          code: 'NOTE_NOT_FOUND',
+          status: 404,
+        });
+        await assert.rejects(notes.editOwned(other, id, { title: 'Blocked' }), {
+          code: 'NOTE_NOT_FOUND',
+          status: 404,
+        });
+        await assert.rejects(notes.removeOwned(other, id), {
+          code: 'NOTE_NOT_FOUND',
+          status: 404,
+        });
+        const edited = await notes.editOwned(owner, id, { body: 'Revised' });
+        assert.equal(edited.body, 'Revised');
+        assert.equal(edited.title, 'Owned note');
+        await notes.removeOwned(owner, id);
+        await assert.rejects(notes.getOwned(owner, id), {
           code: 'NOTE_NOT_FOUND',
           status: 404,
         });

@@ -4,6 +4,35 @@ O2 implements deliberately invoked operators for Dokploy **0.31.3**, Coolify **4
 
 The operators consume O0's selected `ServicePlan`, native artifacts and stable volume/resource references. They bind O1's selected schema manifest **ID**, independently from the immutable image/source identity. References remain read-only historical inputs.
 
+## Manual Dokploy Compose setup
+
+The current local CLI generates Dokploy artifacts when you select `--deploy dokploy`. This example selects MongoDB, basic email/password auth, local storage, and diagnostics.
+
+```sh
+vcli init my-new-api-2 --yes --database mongodb --auth local \
+  --storage local --diagnostics --deploy dokploy
+```
+
+Open `ops/deploy/dokploy/` in the generated app. Use `platform-settings.json` for the Compose and Domains settings, `environment.json` for the selected runtime settings, and `service-plan.json` for private dependencies, named volumes, and release jobs.
+
+| Dokploy field | Value                                                                            |
+| ------------- | -------------------------------------------------------------------------------- |
+| Placement     | The intended Dokploy project, environment, and server                            |
+| Resource type | Standard Docker Compose (`docker-compose`)                                       |
+| Git source    | The reviewed generated-app repository and branch                                 |
+| Compose path  | `./ops/deploy/dokploy/compose.yaml` from the app root                            |
+| Domains       | Your API hostname, service `api`, container port `3100`, path `/`, HTTPS enabled |
+
+Include the generated install-links lockfile and vendored packages in the Git source. For an app nested in a Git repository, prefix the Compose path with the app's repository-relative directory. The Compose build context resolves to the app root and uses `ops/Dockerfile`.
+
+In Dokploy Environment, set `DATABASE_URL`, `REDIS_URL`, `JWT_KEYS_JSON`, and `JWT_ACTIVE_KID` through private runtime settings. Set `PUBLIC_ORIGIN` to the public HTTPS API origin and `ALLOWED_ORIGINS` to the comma-separated allowed frontend origins. The Compose file sets `NODE_ENV=production`, `HOST=0.0.0.0`, and `PORT=3100`.
+
+Use a privately reachable MongoDB replica set with a writable primary, or a sharded deployment that supports transactions. Use a privately reachable Redis service for expiring auth quotas. The app's local development Redis URL uses loopback, so set the hostname reachable from the deployed API container in Dokploy. Use independently generated production signing keys.
+
+Precreate or reuse the external volume names from `service-plan.json`. This selection mounts `app-storage` at `/app/var/storage` and `app-evidence` at `/app/var/evidence` on a single instance. The API runs as UID/GID `1000` and needs both roots owned by that user with mode `0700`. Local private storage requires Linux with `/proc/self/fd` available in the runtime.
+
+Review Preview Compose for network connectivity and labels. Run the explicit `release` job (`node dist/initialize-database.js`) with the same reviewed build and database settings before starting or replacing the API. Keep the `operations` profile disabled during ordinary deployment. Check `/health/ready` after the API starts.
+
 ## Public integration contract
 
 Import from `src/deployment/operators/index.ts` (compiled `dist/deployment/operators/index.js`). No new dependencies, recipe/catalog/config changes, templates, migrations, environment fields or application assets are contributed by O2. There is no CLI registration helper in this slice; root owns command registration, package/distribution and every actual target action.
@@ -68,6 +97,8 @@ CapRover uses its native root namespace `captain`, a pre-existing native project
 `ReleaseFacts` contains a UUID `operationId`, exact lowercase40-hex `sourceCommit`, public `readinessUrl` ending in `/health/ready`, optional `schemaReleaseId`, and distinct `managedEnvironmentKeys`. Dokploy and CapRover require `image:'registry/repository@sha256:<64 lowercase hex>'`; Coolify requires `source:{repository:<credential-free HTTPS Git URL>,branch:<explicit safe branch>}` and pins that exact `sourceCommit` through `git_commit_sha`. It accepts no arbitrary shell text or scripts.
 
 The `preconditions` object requires `exclusiveRef`, `secretRevisionRef`, `ingressRef`, `externalResources:{resourceRef:evidenceRef}`, `volumes:{resourceRef:evidenceRef}`, and an optional CapRover `nodeId` matching private scope. Missing or extra resource references fail. A DB plan requires its exact O1 `schemaReleaseId`; a non-DB plan omits it. The public plan binds every selected requirement, namespace/resource/scope ID, settings fingerprint, operation, source/image identity and schema identity. Credentials, private profile paths and runtime environment values are absent from that plan and its hash.
+
+For every auth-enabled profile, supply `REDIS_URL` in the private runtime environment and include its name in `managedEnvironmentKeys`. Bind the Redis instance with `--resource auth-redis=<resource-id>` and include that resource ID in `preconditions.externalResources`. A selected Centrifugo cluster engine uses its own `--resource redis=<resource-id>` binding and `CENTRIFUGO_ENGINE_REDIS_ADDRESS` setting.
 
 `ingressRef` is explicit independent evidence for reviewed private-path denials, private callbacks/provider/database/diagnostic routes, network/body/timeout policy and TLS/WebSocket routing. Native Domains/SSL configuration alone does not enforce the O0 path-denial list. The operator does not pretend that rendered text applies these rules. External-resource evidence covers preprovisioned private connectivity/least privilege; volume evidence covers existing durable names, node placement, owner1000/mode0700 where required, retained data and backup policy. These attestations are necessary manual setup preconditions, not automatically verified provider evidence.
 

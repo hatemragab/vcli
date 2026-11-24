@@ -16,7 +16,11 @@ async function filesUnder(
     if (entry.isSymbolicLink()) throw new Error('INVALID_DISTRIBUTION');
     if (entry.isDirectory())
       files.push(...(await filesUnder(path, base, prefix)));
-    else if (entry.isFile() && !entry.name.endsWith('.map'))
+    else if (
+      entry.isFile() &&
+      !entry.name.endsWith('.map') &&
+      entry.name !== '.DS_Store'
+    )
       files.push({
         path: `${prefix}/${relative(base, path).split('\\').join('/')}`,
         content: await readFile(path, 'utf8'),

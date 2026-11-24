@@ -10,6 +10,7 @@ import {
 } from './media.entity.js';
 import { requireUploadMode } from '../storage/storage-capabilities.js';
 import {
+  ownerStorageRoot,
   STORAGE_LIMITS,
   type MultipartPart,
   type StorageProfile,
@@ -79,6 +80,15 @@ export class MediaService {
       facts.expiresAt - facts.now > STORAGE_LIMITS.grantSeconds * 1000
     )
       throw new ApplicationError('INVALID_UPLOAD_POLICY', 422);
+    let { profile, stagingRoot } = facts;
+    if ('root' in profile && typeof profile.root === 'string') {
+      const scoped = {
+        ...profile,
+        root: ownerStorageRoot(profile.root, actor.accountId),
+      };
+      profile = scoped;
+      stagingRoot = ownerStorageRoot(stagingRoot, actor.accountId);
+    }
     const record = await this.ledger.reserve({
       id: facts.id,
       ownerId: actor.accountId,
@@ -88,8 +98,8 @@ export class MediaService {
       createdAt: facts.now,
       expiresAt: facts.expiresAt,
       state: 'reserved',
-      profile: facts.profile,
-      stagingRoot: facts.stagingRoot,
+      profile,
+      stagingRoot,
       mode,
       attemptId: randomUUID(),
       generation: 1,

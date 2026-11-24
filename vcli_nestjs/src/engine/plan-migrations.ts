@@ -16,7 +16,11 @@ export async function applySourceMigrationsToPlan(options: {
   sourceMigrations?: readonly string[];
   plan: GenerationPlan;
   lock: ProjectLock;
-  recordChange: (file: RenderedFile, content: string) => Promise<void>;
+  recordChange: (
+    file: Pick<RenderedFile, 'path' | 'ownership'>,
+    content: string,
+    before: Buffer,
+  ) => Promise<void>;
 }): Promise<void> {
   const { projectDir, kind, previous, sourceMigrations, plan, lock } = options;
   for (const migrationId of sourceMigrations ?? []) {
@@ -54,8 +58,9 @@ export async function applySourceMigrationsToPlan(options: {
       );
     if (preview.status === 'supported') {
       await options.recordChange(
-        { path: definition.path, ownership: 'scaffold', content: '' },
+        { path: definition.path, ownership: 'scaffold' },
         preview.content,
+        before,
       );
       (plan.sourceMigrations ??= []).push({
         id: migrationId,

@@ -1,6 +1,10 @@
 import { rm, rmdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { hash } from './data.js';
+import {
+  developmentEnvFile,
+  recoverDevelopmentEnvironment,
+} from './development-environment.js';
 import { readProject } from './state.js';
 import { correlateFailure, EngineError } from './engine-error.js';
 import {
@@ -66,6 +70,17 @@ export async function recoverOperation(
           await projectPath(absolute, directory);
         const restored: string[] = [];
         const conflicts: string[] = [];
+        const development = await recoverDevelopmentEnvironment(journal);
+        // Preserve the ignore rules and remaining project if the owner changed the private file.
+        if (development === 'conflict')
+          return {
+            operationId: journal.id,
+            restored,
+            conflicts: [developmentEnvFile],
+            status: 'conflicted',
+            externalEffects: 'not-reverted',
+          };
+        if (development === 'removed') restored.push(developmentEnvFile);
         for (const entry of [...journal.entries].reverse()) {
           if (entry.status === 'restored') continue;
           const target = await projectPath(absolute, entry.path);

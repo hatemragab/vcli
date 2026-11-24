@@ -1,7 +1,12 @@
 import type { ProjectConfig, RenderedFile } from '../contracts.js';
 import { file, json } from './bundle.js';
+import { developmentMongoUrl } from './config-core-contributions.js';
 import type { EnvironmentContribution } from './render-config.js';
-import { describeServices } from './service-plan.js';
+import {
+  describeServices,
+  serviceImages,
+  serviceResourceName,
+} from './service-plan.js';
 import type { ServicePlan, ServicePlanOptions } from './service-plan-types.js';
 
 /** Only selected local dependencies. The API remains an ordinary project-local Nest process. */
@@ -132,6 +137,9 @@ export function serviceFiles(
     ...options,
     environment: 'test',
   });
+  const auth = config.capabilities.auth;
+  const redisDocker = auth?.options.redisDocker === true;
+  const redisComposePath = 'ops/compose.redis.development.yml';
   return [
     file('ops/local/compose.yaml', json(localCompose(plan))),
     file('ops/local/service-plan.json', json(plan)),
@@ -142,6 +150,50 @@ export function serviceFiles(
       ),
       file(`ops/local/${profile.environment}/service-plan.json`, json(profile)),
     ]),
+    ...(redisDocker
+      ? [
+          file(
+            redisComposePath,
+            json({
+              name: serviceResourceName(plan.project, 'development-auth-redis'),
+              services: {
+                'auth-redis': {
+                  image: serviceImages.redis,
+                  command: [
+                    'redis-server',
+                    '--save',
+                    '',
+                    '--appendonly',
+                    'no',
+                    '--maxmemory',
+                    '64mb',
+                    '--maxmemory-policy',
+                    'noeviction',
+                  ],
+                  ports: [
+                    {
+                      target: 6379,
+                      published: '${VCLI_REDIS_PORT:-6379}',
+                      host_ip: '127.0.0.1',
+                      protocol: 'tcp',
+                    },
+                  ],
+                  tmpfs: ['/data'],
+                  mem_limit: '128m',
+                  cpus: 0.5,
+                  pids_limit: 64,
+                  healthcheck: {
+                    test: ['CMD-SHELL', 'redis-cli ping | grep -qx PONG'],
+                    interval: '5s',
+                    timeout: '3s',
+                    retries: 6,
+                  },
+                },
+              },
+            }),
+          ),
+        ]
+      : []),
     file(
       'ops/local/README.md',
       `# Selected local services
@@ -150,11 +202,13 @@ The project API runs through the installed local Nest CLI, without a VCLI watche
 
 The matching ops/local/development or ops/local/test immutable profile manages only the selected native database. ops/local/compose.yaml and service-plan.json remain development aliases. Services bind 127.0.0.1, have explicit CPU/memory/PID caps and distinct environment volume names. VCLI_CGROUP_PARENT or the command cgroupParent option can select a host-specific parent; portable files assume none. Compose service wrappers validate project ownership before mutation; ordinary down never passes --volumes, removes images or rotates credentials.
 
-${plan.services.some((service) => service.image?.startsWith('mongo:')) ? 'MongoDB is a development-only unauthenticated loopback replica set. service up explicitly runs the bounded setup-profile database-init after process health, then checks writable-primary readiness. For the host API use mongodb://127.0.0.1:<selected-port>/app?replicaSet=rs0&directConnection=true. The fixed internal member database:27017 supports the container; directConnection is required from the host. No transactional production MongoDB provisioning is implied.' : plan.services.some((service) => service.id === 'database' && service.execution === 'compose') ? 'Set VCLI_POSTGRES_PASSWORD privately before the first up; preserve it and the named volume. Later changing this setting does not rotate the stored database password. Supply matching DATABASE_URL privately for the host API.' : 'This selection has no local containers to start; a selected cluster uses its external shared native database.'}
+${plan.services.some((service) => service.image?.startsWith('mongo:')) ? `MongoDB is a development-only unauthenticated loopback replica set. service up explicitly runs the bounded setup-profile database-init after process health, then checks writable-primary readiness. A fresh project's host API uses ${developmentMongoUrl(plan.project, '<selected-port>')}. Keep your existing private database name when changing the host port. The fixed internal member database:27017 supports the container; directConnection is required from the host. No transactional production MongoDB provisioning is implied.` : plan.services.some((service) => service.id === 'database' && service.execution === 'compose') ? 'Set VCLI_POSTGRES_PASSWORD privately before the first up; preserve it and the named volume. Later changing this setting does not rotate the stored database password. Supply matching DATABASE_URL privately for the host API.' : 'This selection has no local containers to start; a selected cluster uses its external shared native database.'}
 
 APP_ENV_FILE is for the API; Compose interpolation uses explicitly supplied process environment (VCLI_POSTGRES_PASSWORD/VCLI_DATABASE_PORT), never implicitly loads API/private .env files. Environment/service-plan JSON contains only names/metadata. Run schema/release initialization explicitly after service readiness and before application startup; ordinary dev does not initialize schemas.
 
-External providers/Centrifugo and optional native diagnostic tools are declared in service-plan.json and are configured separately through their selected owner assets. No Redis/queue daemon or host-gateway viewer topology is invented. API health does not prove those external dependencies. Stop task-owned dev with SIGINT/SIGTERM; wrappers forward only to their owned process group and release their lock, never kill another process by name or port.
+External providers, Centrifugo and optional native diagnostic tools are declared in service-plan.json and are configured separately through their selected owner assets. Verify external dependencies separately from API health. Stop task-owned dev with SIGINT/SIGTERM so the wrapper can forward the signal and release its lock.
+${auth ? `\nAuthentication needs a separately running Redis for rate-limit counters. Start Redis locally or set REDIS_URL to your reachable instance in private configuration. The default is redis://127.0.0.1:6379. The selected database stores accounts.\n` : ''}
+${redisDocker ? `\nThe optional loopback Redis Compose file has its own project and ephemeral counters. From the project root, run \`docker compose -f ${redisComposePath} up -d\` to start it and \`docker compose -f ${redisComposePath} down\` to stop it. Set VCLI_REDIS_PORT for both Compose commands if you need a different host port, and use that port in the application's private REDIS_URL. Use this file for development only. VCLI database service commands operate on the database profile separately.\n` : ''}
 `,
     ),
   ];

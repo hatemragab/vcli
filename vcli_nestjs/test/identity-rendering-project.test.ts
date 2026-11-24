@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import ts from 'typescript';
+import { linkGeneratedDependencies } from './generated-dependencies.ts';
 import {
   contents,
   generatedIdentityProject,
@@ -37,23 +38,7 @@ for (const database of ['mongodb', 'postgres'] as const) {
         await mkdir(dirname(path), { recursive: true });
         await writeFile(path, file.content);
       }
-      try {
-        await symlink(
-          resolve(
-            `examples/reference-api${database === 'postgres' ? '-postgres' : ''}/node_modules`,
-          ),
-          join(directory, 'node_modules'),
-          'dir',
-        );
-      } catch (error: unknown) {
-        if (
-          !error ||
-          typeof error !== 'object' ||
-          !('code' in error) ||
-          error.code !== 'EEXIST'
-        )
-          throw error;
-      }
+      await linkGeneratedDependencies(directory);
       const configPath = join(directory, 'tsconfig.json'),
         read = ts.readConfigFile(configPath, ts.sys.readFile);
       assert.equal(read.error, undefined);
@@ -103,6 +88,10 @@ for (const database of ['mongodb', 'postgres'] as const) {
           'src/modules/identity/identity.module.ts',
         ),
         initialization = contents(project.files, 'src/initialize-database.ts');
+      const manifest = JSON.parse(contents(project.files, 'package.json')) as {
+        dependencies: Record<string, string>;
+      };
+      assert.equal(manifest.dependencies['@redis/client'], '6.4.0');
       assert.match(initialization, /initializeSelectedSchemas/);
       const owners = contents(
         project.files,

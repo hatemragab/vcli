@@ -34,12 +34,16 @@ export function registerGenerationCommands(
   )
     .option('--name <name>', 'Package/project name')
     .option(
+      '--redis-docker',
+      'Generate optional local Redis Compose for the selected authentication recipe',
+    )
+    .option(
       '-y, --yes',
       'Use documented safe defaults without interactive prompts',
     )
     .option(
       '--preset <preset>',
-      'minimal or api (requires a database; unattended API email auth defaults to development/test mail capture)',
+      'minimal or api (requires a database; defaults to basic local auth with storage and diagnostics)',
     );
   init.action(
     async (directory: string | undefined, options: InitCommandOptions) => {

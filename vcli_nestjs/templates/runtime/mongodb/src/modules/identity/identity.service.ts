@@ -2,8 +2,14 @@ import { ApplicationError } from '../../core/errors/application-error.js';
 import { Injectable } from '@nestjs/common';
 import type { MongoDatabase } from '../../core/database/mongo-database.js';
 import type { TransactionContext } from '../../core/database/transaction-context.js';
-import { identitySchema, actionSchema, rateSchema } from './identity.entity.js';
-import type { Identity, Action } from './identity.entity.js';
+import { identitySchema } from './identity.entity.js';
+// vcli:begin email-actions
+import { actionSchema } from './identity.entity.js';
+// vcli:end email-actions
+import type { Identity } from './identity.entity.js';
+// vcli:begin email-actions
+import type { Action } from './identity.entity.js';
+// vcli:end email-actions
 @Injectable()
 export class IdentityService {
   constructor(private readonly database: MongoDatabase) {}
@@ -70,6 +76,7 @@ export class IdentityService {
       { session: db.context(ctx) },
     );
   }
+  // vcli:begin email-actions
   async addAction(row: Action, ctx: TransactionContext): Promise<void> {
     const db = this.database;
     const actions = db.connection.model('AppAction', actionSchema);
@@ -95,37 +102,7 @@ export class IdentityService {
       .lean<Action>()
       .exec();
   }
-  async spendRate(
-    key: string,
-    window: number,
-    limit: number,
-    ctx: TransactionContext,
-  ): Promise<boolean> {
-    const db = this.database;
-    const rates = db.connection.model('AppIdentityRate', rateSchema);
-    const current = await rates
-      .findById(key)
-      .session(db.context(ctx))
-      .lean<{
-        window: number;
-        used: number;
-      }>()
-      .exec();
-    if (current && current.window > window) return false;
-    const used = current?.window === window ? current.used + 1 : 1;
-    if (current)
-      await rates.updateOne(
-        { _id: key },
-        { $set: { window, used } },
-        { session: db.context(ctx) },
-      );
-    else
-      await rates.create([{ _id: key, key, window, used }], {
-        session: db.context(ctx),
-      });
-    return used <= limit;
-  }
-
+  // vcli:end email-actions
   async list(accountId: string, ctx: TransactionContext): Promise<Identity[]> {
     return this.database.connection
       .model('AppIdentity', identitySchema)

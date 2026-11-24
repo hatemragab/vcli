@@ -1,5 +1,6 @@
 import type { Command } from 'commander';
 import path from 'node:path';
+import { statOrNull } from '../engine/paths.js';
 import { executeDevCommand } from '../services/dev-command.js';
 import { CliError } from './cli-error.js';
 import {
@@ -51,16 +52,35 @@ export function registerDevCommand(
         state = await selectedProject(root),
         plan = localPlan(state.config, selectedEnvironment);
       requireLocalProfile(state.lock, selectedEnvironment);
-      if (!options.dryRun) requireInstalled(state.outcomes);
+      const runtimeEnvironment = options.dryRun ? {} : environment();
+      let envFile = options.configFile
+        ? path.resolve(root, options.configFile)
+        : undefined;
+      if (!options.dryRun) {
+        requireInstalled(state.outcomes);
+        if (!envFile && !runtimeEnvironment.APP_ENV_FILE) {
+          const localFile = path.join(root, `.env.${selectedEnvironment}`);
+          if (await statOrNull(localFile)) envFile = localFile;
+        }
+      }
+      if (!options.dryRun && !envFile && !runtimeEnvironment.APP_ENV_FILE) {
+        const api = plan.services.find((service) => service.kind === 'api');
+        const missing = api?.environment
+          .filter((field) => field.required && !runtimeEnvironment[field.key])
+          .map((field) => field.key);
+        if (missing?.length)
+          throw new CliError(
+            'DEV_CONFIG_REQUIRED',
+            `Set ${missing.join(', ')} in the environment or select a private file with --config-file. For make dev, use .env.${selectedEnvironment} or CONFIG_FILE.`,
+          );
+      }
       const result = await executeDevCommand(
         {
           root,
           plan,
           port: selectedPort,
-          environment: options.dryRun ? {} : environment(),
-          ...(options.configFile
-            ? { envFile: path.resolve(root, options.configFile) }
-            : {}),
+          environment: runtimeEnvironment,
+          ...(envFile ? { envFile } : {}),
           dryRun: !!options.dryRun,
         },
         execution.devRunner,

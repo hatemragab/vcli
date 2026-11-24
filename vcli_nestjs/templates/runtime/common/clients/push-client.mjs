@@ -1,4 +1,6 @@
 /** Import from the selected app's generated clients directory. Keeps secrets out of return values/errors/logs. */
+import { readApiError } from './api-error.mjs';
+
 export function pushClient({
   origin,
   accessToken,
@@ -14,19 +16,23 @@ export function pushClient({
     !['http:', 'https:'].includes(base.protocol)
   )
     throw new Error('INVALID_API_ORIGIN');
-  const headers = {
-    Authorization: `Bearer ${accessToken}`,
-    'Content-Type': 'application/json',
-    ...(sessionToken ? { 'X-Session-Token': sessionToken } : {}),
-  };
   async function invoke(path, method, body) {
+    const token =
+      typeof accessToken === 'function' ? await accessToken() : accessToken;
+    const session =
+      typeof sessionToken === 'function' ? await sessionToken() : sessionToken;
     const response = await request(new URL(`/api/push/${path}`, base), {
       method,
-      headers,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        ...(session ? { 'X-Session-Token': session } : {}),
+      },
       redirect: 'error',
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
-    if (!response.ok) throw new Error(`PUSH_HTTP_${response.status}`);
+    if (!response.ok)
+      throw await readApiError(response, `PUSH_HTTP_${response.status}`);
     return response.json();
   }
   return {

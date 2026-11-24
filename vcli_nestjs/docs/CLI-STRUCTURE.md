@@ -26,7 +26,7 @@ templates/runtime/
 src/
   main.ts                    startup and signals
   create-app.ts              explicit selected composition and cleanup
-  app.custom.module.ts       developer features and configured imports
+  app.custom.module.ts       static imports for developer features
   core/
     database/                the chosen native BaseRepository and transactions
     auth/                    small shared authority/session facts
@@ -63,4 +63,4 @@ Modules stay flat: entity, service, module and optional controller/focused helpe
 
 `AccountService`, `InstallationService`, `SessionService` and notes data services inherit native repository helpers. MongoDB keeps native filters, projections, sessions, population/aggregation/bulk support. PostgreSQL keeps Drizzle SQL/columns/conflict targets. There is no runtime database branch or universal filter adapter. Security-sensitive conditional writes and shared transactions remain explicit owner operations; controllers do not expose unrestricted repository filters.
 
-Inspect the committed [MongoDB notes example](../examples/test_notes_mongo/README.md). To render the broader MongoDB and PostgreSQL review projects locally, run `npm run build` and then `node scripts/render-review-projects.ts`. The script writes the review projects under `var/generated-reviews/`. See [CLI verification](CLI-VERIFICATION.md) for build evidence and external setup limits.
+To render MongoDB and PostgreSQL review projects locally, run `npm run build` and then `node scripts/render-review-projects.ts`. The script writes the review projects under `var/generated-reviews/`. See [CLI verification](CLI-VERIFICATION.md) for build evidence and external setup limits.

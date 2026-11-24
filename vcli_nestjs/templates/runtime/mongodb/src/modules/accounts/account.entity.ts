@@ -15,7 +15,7 @@ export const accountSchema = new Schema<Account>(
     createdAt: Number,
   },
   {
-    collection: 'ref_accounts',
+    collection: 'accounts',
     autoCreate: false,
     autoIndex: false,
     versionKey: false,

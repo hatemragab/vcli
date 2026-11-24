@@ -29,6 +29,7 @@ export async function storageFiles(
   )
     throw new Error('UNSUPPORTED_UPLOAD_MODE');
   const direct = modes.includes('presigned');
+  const multipart = modes.includes('multipart');
   const paths = [
     'private-filesystem.ts',
     'bounded-stream.ts',
@@ -46,8 +47,13 @@ export async function storageFiles(
   const entity = files.find((entry) =>
     entry.path.endsWith('storage.entity.ts'),
   )!;
+  const profileStart = requireIndex(
+    entity.content,
+    'export type StorageProfile',
+    entity.path,
+  );
   const tail = sliceFrom(entity.content, 'export type UploadMode', entity.path);
-  entity.content = `export type StorageProfile = Readonly<${
+  entity.content = `${entity.content.slice(0, profileStart)}export type StorageProfile = Readonly<${
     local
       ? "{version:1;driver:'local';root:string}"
       : `{version:1;driver:'s3';profile:'${profile}';bucket:string;region:string;endpoint?:string;forcePathStyle:boolean}`
@@ -89,7 +95,8 @@ export async function storageFiles(
   files.push(
     file(
       'src/modules/storage/storage.module.ts',
-      `import {Module,type DynamicModule} from '@nestjs/common';
+      `import {Module} from '@nestjs/common';
+import {bootstrapBinding} from '../../core/bootstrap/bootstrap-bindings.js';
 import type {AppConfig} from '../../core/config/app-config.js';
 import type {StorageProfile} from './storage.entity.js';
 import {LocalStorageService} from './local-storage.service.js';
@@ -98,25 +105,30 @@ ${local ? '' : "import {S3StorageService} from './s3-storage.service.js';"}
 ${direct ? "import {createAwsPostGrant} from './aws-post-policy.js';" : ''}
 ${local ? '' : `const providerFactory=(profile:StorageProfile)=>new S3StorageService(profile,${direct ? '{directPost:createAwsPostGrant}' : '{}'});`}
 export function selectedStorageProfile(${local ? '_config' : 'config'}:AppConfig,${local ? 'root' : '_root'}:string):StorageProfile{return ${local ? "{version:1,driver:'local',root}" : `{version:1,driver:'s3',profile:'${profile}',bucket:config.storage.bucket,region:config.storage.region,endpoint:config.storage.endpoint,forcePathStyle:config.storage.forcePathStyle}`};}
-@Module({})
-export class StorageModule {
-  static register(service:StorageService=new StorageService(new LocalStorageService())):DynamicModule {
-    ${local ? '' : 'service.configureProviders(providerFactory);'}
-    return {module:StorageModule,providers:[{provide:StorageService,useValue:service}],exports:[StorageService]};
-  }
+const storageBinding=bootstrapBinding<StorageService>(StorageService);
+export function bindStorage(service:StorageService=new StorageService(new LocalStorageService())){
+  ${local ? '' : 'service.configureProviders(providerFactory);'}
+  return storageBinding.bind(service);
 }
+@Module({providers:[storageBinding.provider],exports:[StorageService]})
+export class StorageModule {}
 `,
     ),
   );
   const setup = await bundled('ops/storage/private-storage-setup.md');
-  // Select the relevant setup paragraph; common filesystem/cleanup/serving requirements remain.
   setup.content = setup.content
     .split('\n\n')
     .filter((paragraph) => {
-      if (paragraph.startsWith('AWS S3:')) return !local && profile === 'aws';
-      if (paragraph.startsWith('Cloudflare R2:'))
+      if (paragraph.startsWith('**Local objects.**')) return local;
+      if (paragraph.startsWith('**AWS S3.**'))
+        return !local && profile === 'aws';
+      if (paragraph.startsWith('**Cloudflare R2.**'))
         return !local && profile === 'r2';
-      if (paragraph.startsWith('For AWS/R2,')) return !local;
+      if (paragraph.startsWith('**S3 ')) return !local;
+      if (paragraph.startsWith('**Provider staging.**'))
+        return direct || multipart;
+      if (paragraph.startsWith('**AWS direct POST.**')) return direct;
+      if (paragraph.startsWith('**Multipart.**')) return multipart;
       return true;
     })
     .join('\n\n');
@@ -190,9 +202,10 @@ export async function mediaFiles(
   files.push(
     file(
       'src/modules/media/media.module.ts',
-      `import {Module,type DynamicModule} from '@nestjs/common';
+      `import {Module} from '@nestjs/common';
+import {bootstrapBinding,type BootstrapBinding} from '../../core/bootstrap/bootstrap-bindings.js';
 import type {AppConfig} from '../../core/config/app-config.js';
-import type {PrincipalAuthority} from '../../core/auth/principal-authority.js';
+import {PRINCIPAL_AUTHORITY,type PrincipalAuthority} from '../../core/auth/principal-authority.js';
 import {HttpSecurityModule} from '../../core/http/http-security.module.js';
 import {StorageModule} from '../storage/storage.module.js';
 import {StorageService} from '../storage/storage.service.js';
@@ -201,14 +214,25 @@ import {MediaController,MEDIA_HTTP_OPTIONS,type MediaHttpOptions} from './media.
 import {MediaRepository} from './media.repository.js';
 import {${store}} from './${mongo ? 'mongo' : 'postgres'}-media-state-store.js';
 import type {MediaStateStore} from './media-state-store.js';
+const MEDIA_STORE=Symbol('MediaStore');
+const storeBinding=bootstrapBinding<MediaStateStore>(MEDIA_STORE);
+const optionsBinding=bootstrapBinding<MediaHttpOptions>(MEDIA_HTTP_OPTIONS);
+@Module({
+  imports:[HttpSecurityModule,StorageModule],
+  controllers:[MediaController],
+  providers:[storeBinding.provider,optionsBinding.provider,
+    {provide:MediaRepository,inject:[MEDIA_STORE],useFactory:(store:MediaStateStore)=>new MediaRepository(store)},
+    {provide:MediaService,inject:[MediaRepository,StorageService,PRINCIPAL_AUTHORITY],useFactory:(repository:MediaRepository,storage:StorageService,authority:PrincipalAuthority)=>new MediaService(repository,storage,authority)}],
+  exports:[MediaService],
+})
+export class MediaModule {}
 export async function initializeMediaSchema(config:AppConfig):Promise<void>{const store=await ${store}.connect(config.database.url,true);await store.close();}
-@Module({})
-export class MediaModule {
-  static register(store:MediaStateStore,authority:PrincipalAuthority,options:MediaHttpOptions,storage:StorageService):DynamicModule {
-    return {module:MediaModule,imports:[HttpSecurityModule.register(authority),StorageModule.register(storage)],controllers:[MediaController],providers:[{provide:MediaRepository,useFactory:()=>new MediaRepository(store)},{provide:MediaService,inject:[MediaRepository,StorageService],useFactory:(repository:MediaRepository,storage:StorageService)=>new MediaService(repository,storage,authority)},{provide:MEDIA_HTTP_OPTIONS,useValue:options}],exports:[MediaService]};
+export async function createMediaRuntime(config:AppConfig,options:MediaHttpOptions):Promise<{bindings:readonly BootstrapBinding[];close():Promise<void>}>{
+  const store=await ${store}.connect(config.database.url,false);
+  try {
+    return {bindings:[storeBinding.bind(store),optionsBinding.bind({...options,modes:config.storage.modes})],close:()=>store.close()};
+  }catch(error){await store.close();throw error;}
   }
-}
-export async function createMediaRuntime(config:AppConfig,authority:PrincipalAuthority,options:MediaHttpOptions,storage:StorageService){const store=await ${store}.connect(config.database.url,false);try{return {module:MediaModule.register(store,authority,{...options,modes:config.storage.modes},storage),close:()=>store.close()};}catch(error){await store.close();throw error;}}
 `,
     ),
   );

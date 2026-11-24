@@ -5,7 +5,7 @@ import type {
 } from '../contracts.js';
 import { file } from './bundle.js';
 import { formatFiles } from './format-files.js';
-import { selection } from './selection.js';
+import { basicLocalAuth, selection } from './selection.js';
 import { projectChecks } from './project-checks.js';
 export type ScaffoldKind =
   | 'feature'
@@ -22,15 +22,42 @@ export interface ScaffoldRequest {
   uses?: readonly string[];
 }
 export const injectableCapabilities = {
-  notes: { service: 'NotesService', file: '../notes/notes.service.js' },
-  mail: { service: 'MailService', file: '../mail/mail.service.js' },
-  storage: { service: 'StorageService', file: '../storage/storage.service.js' },
+  notes: {
+    service: 'NotesService',
+    file: '../notes/notes.service.js',
+    module: 'NotesModule',
+  },
+  mail: {
+    service: 'MailService',
+    file: '../mail/mail.service.js',
+    module: 'MailModule',
+  },
+  storage: {
+    service: 'StorageService',
+    file: '../storage/storage.service.js',
+    module: 'StorageModule',
+  },
+  media: {
+    service: 'MediaService',
+    file: '../media/media.service.js',
+    module: 'MediaModule',
+  },
   realtime: {
     service: 'RealtimeService',
     file: '../realtime/realtime.service.js',
+    module: 'RealtimeModule',
   },
-  push: { service: 'PushService', file: '../push/push.service.js' },
+  push: {
+    service: 'PushService',
+    file: '../push/push.service.js',
+    module: 'PushModule',
+  },
 } as const;
+type ModuleImport = Readonly<{ symbol: string; path: string }>;
+const databaseModule: ModuleImport = {
+  symbol: 'DatabaseModule',
+  path: '../../core/database/database.module.js',
+};
 export const scaffoldKinds: readonly string[] = [
   'feature',
   'service',
@@ -50,6 +77,7 @@ export async function renderScaffold(
   if (
     !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(request.name) ||
     request.name.length > 64 ||
+    (request.name === 'auth' && basicLocalAuth(config)) ||
     [
       'core',
       'generated',
@@ -106,12 +134,14 @@ export async function renderScaffold(
         `@Inject(${capability.service}) protected readonly ${capability.name}:${capability.service}`,
     )
     .join(',');
-  const pending = [
-    `Integrate ${type} explicitly in AppCustomModule; configured capability modules must be imported by each consumer. No custom source was rewritten.`,
-  ];
-  if (uses.length)
+  const capabilityModules = capabilities.map(({ name, module }) => ({
+    symbol: module,
+    path: `../${name}/${name}.module.js`,
+  }));
+  const pending: string[] = [];
+  if (request.kind === 'feature' || request.kind === 'repository')
     pending.push(
-      `Pass configured ${uses.join(', ')} module handles to ${type}Module.register${selection(config, 'database') ? '(capabilities.database!, ' : '('}{${uses.map((name) => `${name}:capabilities.${name}!`).join(',')}}) in AppCustomModule.register. No consumer source is rewritten.`,
+      `Add ${type}Module to the imports of AppCustomModule in src/app.custom.module.ts when the feature is ready.`,
     );
   const add = (suffix: string, source: string) =>
     files.push(
@@ -130,8 +160,17 @@ export async function renderScaffold(
         'entity',
         `import {Schema} from 'mongoose';
 export type ${type}=Readonly<{id:string}>;
-export const ${camel(type)}Schema=new Schema<${type}>({id:{type:String,required:true,unique:true}},{collection:'${name.replaceAll('-', '_')}',versionKey:false,strict:'throw',autoCreate:false,autoIndex:false});
-${camel(type)}Schema.add(new Schema({_id:String}));
+const fields={
+  _id:{type:String,required:true},
+  id:{type:String,required:true,unique:true},
+};
+export const ${camel(type)}Schema=new Schema<${type}>(fields,{
+  collection:'${name.replaceAll('-', '_')}',
+  versionKey:false,
+  strict:'throw',
+  autoCreate:false,
+  autoIndex:false,
+});
 `,
       );
     else
@@ -157,12 +196,38 @@ ${serviceImports}
 export class ${className} extends BaseRepository<${type}>{constructor(@Inject(${database}) database:${database}${serviceParameters ? ',' + serviceParameters : ''}){super(database,${mongo ? `'${type}',${camel(type)}Schema` : `{table:${camel(type)}Table,columns:{...getTableColumns(${camel(type)}Table)},conflictTargets:[['id']]}`});}}
 `,
     );
-    add('module', moduleSource(type, className, name, suffix, true, uses));
+    add(
+      'module',
+      moduleSource(type, className, name, suffix, [
+        databaseModule,
+        ...capabilityModules,
+      ]),
+    );
     pending.push(
       mongo
-        ? `Initialize the ${camel(type)}Schema collection/indexes with a preserving migration; activate ${type}Module.register with the configured database${uses.length ? ' and declared capability handles' : ''} from AppCustomModule.register before using it.`
-        : `Add and review a preserving SQL migration for ${camel(type)}Table; activate ${type}Module.register with the configured database${uses.length ? ' and declared capability handles' : ''} from AppCustomModule.register before using it.`,
+        ? `Initialize the ${camel(type)}Schema collection and indexes before enabling the feature.`
+        : `Define and apply the schema for ${camel(type)}Table before enabling the feature.`,
     );
+    if (request.kind === 'feature') {
+      add(
+        'seed',
+        `import type { ModuleSeeder } from '../../core/database/module-seeder.js';
+import { ApplicationError } from '../../core/errors/application-error.js';
+
+/**
+ * Define fixture prerequisites, validation and insert-if-missing operations in this feature.
+ * When ready, import seed${type} in src/seed/custom-seeders.ts and add
+ * { module: '${name}', run: seed${type} } to customSeeders.
+ */
+export const seed${type}: ModuleSeeder = async (_database) => {
+  throw new ApplicationError('SEED_FIXTURES_NOT_IMPLEMENTED');
+};
+`,
+      );
+      pending.push(
+        `After implementing fixtures in src/modules/${name}/${name}.seed.ts, import seed${type} from '../modules/${name}/${name}.seed.js' in src/seed/custom-seeders.ts and add { module: '${name}', run: seed${type} } to customSeeders.`,
+      );
+    }
   } else if (
     request.kind === 'feature' ||
     request.kind === 'service' ||
@@ -181,7 +246,10 @@ export class ${className}{${serviceParameters ? `constructor(${serviceParameters
 `,
     );
     if (request.kind === 'feature')
-      add('module', moduleSource(type, className, name, suffix, false, uses));
+      add(
+        'module',
+        moduleSource(type, className, name, suffix, capabilityModules),
+      );
     pending.push(
       'Implement typed input, verified actor policy, owner invariants and an explicit result; unfinished execute throws and is unexposed.',
     );
@@ -222,7 +290,7 @@ export class ${type}Realtime {constructor(private readonly realtime:RealtimeServ
 `,
     );
     pending.push(
-      `Import the configured RealtimeModule in the consuming module and authorize each publication using trusted owner state; no socket handler or route was invented.`,
+      'Import RealtimeModule in the consuming module and authorize each publication using trusted owner state.',
     );
   }
   return {
@@ -244,31 +312,27 @@ function moduleSource(
   provider: string,
   name: string,
   suffix: string,
-  dataOwner = false,
-  uses: readonly string[] = [],
+  dependencies: readonly ModuleImport[],
 ): string {
-  const configured = dataOwner || uses.length > 0;
-  const options = uses.length
-    ? `capabilities:Readonly<Record<${uses.map((name) => `'${name}'`).join('|')},DynamicModule>>`
+  const moduleName = `${type}Module`;
+  const imports = dependencies.map(({ symbol, path }) => ({
+    symbol,
+    path,
+    localName: symbol === moduleName ? `Vcli${symbol}` : symbol,
+  }));
+  const moduleImports = imports
+    .map(
+      ({ symbol, path, localName }) =>
+        `import {${symbol}${symbol === localName ? '' : ` as ${localName}`}} from '${path}';`,
+    )
+    .join('\n');
+  const importMetadata = imports.length
+    ? `imports:[${imports.map(({ localName }) => localName).join(',')}],`
     : '';
-  const parameters = [dataOwner ? 'database:DynamicModule' : '', options]
-    .filter(Boolean)
-    .join(',');
-  const imports = [
-    dataOwner ? 'database' : '',
-    ...uses.map((name) => `capabilities.${name}`),
-  ]
-    .filter(Boolean)
-    .join(',');
-  return `import {Module${configured ? ',type DynamicModule' : ''}} from '@nestjs/common';
+  return `import {Module} from '@nestjs/common';
+${moduleImports}
 import {${provider}} from './${name}.${suffix}.js';
-// Import configured capability modules explicitly before activation.
-${
-  configured
-    ? `@Module({})
-export class ${type}Module {static register(${parameters}):DynamicModule{return {module:${type}Module,imports:[${imports}],providers:[${provider}],exports:[${provider}]};}}`
-    : `@Module({providers:[${provider}],exports:[${provider}]})
-export class ${type}Module {}`
-}
+@Module({${importMetadata}providers:[${provider}],exports:[${provider}]})
+export class ${moduleName} {}
 `;
 }

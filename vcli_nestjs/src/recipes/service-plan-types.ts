@@ -13,6 +13,7 @@ export type ResourceId =
   | 'apns'
   | 'centrifugo'
   | 'redis'
+  | 'auth-redis'
   | 'diagnostic-reader';
 export interface ServicePlanOptions {
   environment?: ServiceEnvironment;

@@ -69,72 +69,143 @@ test('emitted architecture gate rejects type cycles, extra classes and hidden-lo
   }
 });
 
-test('foundation emitted database gate rejects DB source and alias/locked closure drift', async () => {
-  const config: ProjectConfig = {
-    schemaVersion: 1,
-    project: { name: 'isolation-fixture', packageManager: 'npm' },
-    capabilities: { foundation: { recipe: 'foundation.nest', options: {} } },
-  };
-  const project = await recipeCatalog.render(
-    config,
-    recipeCatalog.recipes.filter((r) => r.family === 'foundation'),
-  );
-  const directory = await mkdtemp(join(tmpdir(), 'vcli-recipe-isolation-'));
-  try {
-    await symlink(
-      resolve('node_modules'),
-      join(directory, 'node_modules'),
-      'dir',
-    );
-    for (const file of project.files.filter((f) =>
-      f.path.startsWith('scripts/'),
-    )) {
-      const path = join(directory, file.path);
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, file.content);
-    }
-    // Deliberate synthetic corruption fixture; this is not installation evidence.
-    await writeFile(
-      join(directory, 'package.json'),
-      JSON.stringify({
-        type: 'module',
-        dependencies: { disguised: 'npm:pg@8.23.1' },
-      }),
-    );
-    await writeFile(
-      join(directory, 'package-lock.json'),
-      JSON.stringify({
-        lockfileVersion: 3,
-        packages: {
-          '': { dependencies: { disguised: 'npm:pg@8.23.1' } },
-          'node_modules/disguised': { name: 'pg', version: '8.23.1' },
-        },
-      }),
-    );
-    await mkdir(join(directory, 'src'));
-    await writeFile(
-      join(directory, 'src/postgres-database.ts'),
-      'export class PostgresDatabase {}',
-    );
-    const checker: {
-      checkDatabaseIsolation(
-        path: string,
-      ): Promise<{ database: string; failures: string[] }>;
-    } = await import(
-      pathToFileURL(join(directory, 'scripts/database-isolation-rules.ts')).href
-    );
-    const failed = await checker.checkDatabaseIsolation(directory);
-    assert.equal(failed.database, 'none');
-    assert.ok(failed.failures.some((f) => f.includes('forbidden dependency')));
-    assert.ok(
-      failed.failures.some((f) => f.includes('forbidden installed package')),
-    );
-    assert.ok(
-      failed.failures.some((f) =>
-        f.includes('unselected database source file'),
+const databaseProfiles = [
+  {
+    database: 'none',
+    requiredPackages: [],
+    selectedSource: 'bootstrap.ts',
+    oppositePackage: 'pg',
+    oppositeSource: 'postgres-database.ts',
+  },
+  {
+    database: 'mongodb',
+    requiredPackages: ['mongoose'],
+    selectedSource: 'mongo-database.ts',
+    oppositePackage: 'pg',
+    oppositeSource: 'postgres-database.ts',
+  },
+  {
+    database: 'postgres',
+    requiredPackages: ['drizzle-orm', 'pg'],
+    selectedSource: 'postgres-database.ts',
+    oppositePackage: 'mongoose',
+    oppositeSource: 'mongo-database.ts',
+  },
+] as const;
+
+for (const profile of databaseProfiles) {
+  test(`emitted ${profile.database} database gate rejects unselected source and locked aliases`, async () => {
+    const config: ProjectConfig = {
+      schemaVersion: 1,
+      project: { name: 'isolation-fixture', packageManager: 'npm' },
+      capabilities: { foundation: { recipe: 'foundation.nest', options: {} } },
+    };
+    if (profile.database !== 'none')
+      config.capabilities.database = {
+        recipe: `database.${profile.database}`,
+        options: {},
+      };
+    const project = await recipeCatalog.render(
+      config,
+      recipeCatalog.recipes.filter(
+        (r) => config.capabilities[r.family]?.recipe === r.id,
       ),
     );
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
+    const makefile = project.files.find((file) => file.path === 'Makefile');
+    assert.ok(makefile);
+    assert.equal(
+      makefile.content.includes('first-run: build'),
+      profile.database !== 'none',
+    );
+    if (profile.database !== 'none') {
+      assert.match(
+        makefile.content,
+        /FIRST_RUN_CONFIG_FILE := \$\(or \$\(CONFIG_FILE\),\$\(APP_ENV_FILE\),\$\(wildcard \.env\.development\)\)/,
+      );
+      assert.match(
+        makefile.content,
+        /vcli release apply \$\(FIRST_RUN_CONFIG_ARG\)/,
+      );
+      assert.match(
+        makefile.content,
+        /\$\(MAKE\) dev ENVIRONMENT=development CONFIG_FILE="\$\(FIRST_RUN_CONFIG_FILE\)"/,
+      );
+    }
+    const directory = await mkdtemp(join(tmpdir(), 'vcli-recipe-isolation-'));
+    try {
+      await symlink(
+        resolve('node_modules'),
+        join(directory, 'node_modules'),
+        'dir',
+      );
+      const checkerPath = 'scripts/database-isolation-rules.ts';
+      const source = project.files.find((file) => file.path === checkerPath);
+      assert.ok(source);
+      await mkdir(join(directory, 'scripts'));
+      await mkdir(join(directory, 'src'));
+      await writeFile(join(directory, checkerPath), source.content);
+      await writeFile(
+        join(directory, 'src', profile.selectedSource),
+        'export const fixture = true;',
+      );
+      // The checker reads synthetic package metadata without installing SDKs.
+      const dependencies = Object.fromEntries(
+        profile.requiredPackages.map((name) => [name, '1.0.0']),
+      );
+      const packages = Object.fromEntries(
+        profile.requiredPackages.map((name) => [
+          `node_modules/${name}`,
+          { name, version: '1.0.0' },
+        ]),
+      );
+      async function writePackageMetadata(): Promise<void> {
+        await writeFile(
+          join(directory, 'package.json'),
+          JSON.stringify({ type: 'module', dependencies }),
+        );
+        await writeFile(
+          join(directory, 'package-lock.json'),
+          JSON.stringify({
+            lockfileVersion: 3,
+            packages: { '': { dependencies }, ...packages },
+          }),
+        );
+      }
+      await writePackageMetadata();
+      const checker: {
+        checkDatabaseIsolation(
+          path: string,
+        ): Promise<{ database: string; failures: string[] }>;
+      } = await import(pathToFileURL(join(directory, checkerPath)).href);
+      const passed = await checker.checkDatabaseIsolation(directory);
+      assert.equal(passed.database, profile.database);
+      assert.deepEqual(passed.failures, []);
+
+      dependencies.disguised = `npm:${profile.oppositePackage}@1.0.0`;
+      packages['node_modules/disguised'] = {
+        name: profile.oppositePackage,
+        version: '1.0.0',
+      };
+      await writePackageMetadata();
+      await writeFile(
+        join(directory, 'src', profile.oppositeSource),
+        'export const fixture = true;',
+      );
+      const failed = await checker.checkDatabaseIsolation(directory);
+      assert.equal(failed.database, profile.database);
+      assert.ok(
+        failed.failures.some((f) => f.includes('forbidden dependency')),
+      );
+      assert.ok(
+        failed.failures.some((f) => f.includes('forbidden installed package')),
+      );
+      assert.ok(
+        failed.failures.some((f) =>
+          f.includes('unselected database source file'),
+        ),
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}

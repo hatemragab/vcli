@@ -1,14 +1,23 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { cp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { linkGeneratedDependencies } from '../test/generated-dependencies.ts';
 import { join, resolve } from 'node:path';
 import ts from 'typescript';
+import {
+  redactGeneratedRedisOutput,
+  requireGeneratedRedisTestUrl,
+} from './generated-redis-fixture.ts';
 
 // Coordinator-only local acceptance. Uses cached, capped containers; never provider accounts.
 const root = resolve('.');
 const evidenceRoot = join(root, 'var/cli-evidence/native-capabilities');
 const evidence = join(evidenceRoot, 'attempt-' + Date.now());
+const identityRedis =
+  process.env.VCLI_IDENTITY_REDIS_TEST_URL === undefined
+    ? undefined
+    : requireGeneratedRedisTestUrl(process.env, 'VCLI_IDENTITY_REDIS_TEST_URL');
 await mkdir(evidence, { recursive: true, mode: 0o700 });
 const environment: NodeJS.ProcessEnv = {
   PATH: process.env.PATH,
@@ -47,6 +56,8 @@ async function run(
     maxBuffer: 16000000,
   });
   let output = result.stdout + result.stderr;
+  if (identityRedis)
+    output = redactGeneratedRedisOutput(output, [identityRedis]);
   for (const value of privateValues)
     output = output.replaceAll(value, '[PRIVATE]');
   await writeFile(join(evidence, name + '.log'), output, { mode: 0o600 });
@@ -63,24 +74,7 @@ async function compilePreparation(driver: 'mongodb' | 'postgres') {
   const directory = join(evidence, 'preparation', driver);
   await mkdir(join(directory, 'src/modules'), { recursive: true });
   await writeFile(join(directory, 'package.json'), '{"type":"module"}');
-  try {
-    await symlink(
-      join(
-        root,
-        `examples/reference-api${driver === 'postgres' ? '-postgres' : ''}/node_modules`,
-      ),
-      join(directory, 'node_modules'),
-      'dir',
-    );
-  } catch (error: unknown) {
-    if (!(
-      error &&
-      typeof error === 'object' &&
-      'code' in error &&
-      error.code === 'EEXIST'
-    ))
-      throw error;
-  }
+  await linkGeneratedDependencies(directory);
   await cp('templates/runtime/common/src/core', join(directory, 'src/core'), {
     recursive: true,
   });
@@ -362,6 +356,9 @@ try {
         {
           TEST_DATABASE_URL: url(database),
           ...extra,
+          ...(name === 'identity' && identityRedis
+            ? { VCLI_IDENTITY_REDIS_TEST_URL: identityRedis }
+            : {}),
           ...(name === 'release'
             ? {
                 TEST_RESTORE_DATABASE_URL: url(restoreName),

@@ -6,20 +6,26 @@ import {
   runJoinedDiagnosticServices,
 } from '../scripts/verify-diagnostic-services.ts';
 
-test('joined probe remains fixture-only with explicit configured native and diagnostic imports', () => {
+test('joined probe remains fixture-only with static native and diagnostic imports', () => {
   const files = diagnosticProbeSources(randomUUID());
   assert.equal(Object.keys(files).length, 5);
-  assert(
-    files['src/app.custom.module.ts']!.includes(
-      'capabilities.database,capabilities.diagnostics',
-    ),
+  assert.match(
+    files['src/app.custom.module.ts']!,
+    /imports:\[DiagnosticProbeModule\]/,
+  );
+  assert.match(
+    files['src/modules/diagnostic-probe/diagnostic-probe.module.ts']!,
+    /imports:\[DatabaseModule,DiagnosticsModule\]/,
   );
   assert(
     files['src/modules/diagnostic-probe/diagnostic-probe.service.ts']!.includes(
       'this.database.run(context=>this.database.context(context).execute',
     ),
   );
-  assert(!/ModuleRef|@Global|forwardRef/.test(Object.values(files).join('\n')));
+  assert.doesNotMatch(
+    Object.values(files).join('\n'),
+    /DynamicModule|ModuleRef|@Global|forwardRef/,
+  );
 });
 
 test(

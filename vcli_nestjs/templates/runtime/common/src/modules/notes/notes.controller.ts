@@ -1,9 +1,12 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   Inject,
   Param,
+  Patch,
   Post,
   Query,
   Res,
@@ -18,10 +21,24 @@ import { parseInput } from '../../core/http/parse-input.js';
 import { PrincipalGuard } from '../../core/http/principal.guard.js';
 import {
   createNoteSchema,
+  editNoteSchema,
   noteIdSchema,
   notesQuerySchema,
 } from './notes-input.js';
 import { NotesService } from './notes.service.js';
+
+const noteFields = {
+  title: { type: 'string', minLength: 1, maxLength: 120 },
+  body: { type: 'string', maxLength: 10000 },
+  // vcli:notes-media:start
+  imageId: {
+    type: 'string',
+    format: 'uuid',
+    nullable: true,
+    description: 'Owned finalized image ID. Pass null to detach.',
+  },
+  // vcli:notes-media:end
+} as const;
 
 @ApiTags('Notes example')
 @ApiBearerAuth()
@@ -38,10 +55,7 @@ export class NotesController {
       type: 'object',
       required: ['title'],
       additionalProperties: false,
-      properties: {
-        title: { type: 'string', minLength: 1, maxLength: 120 },
-        body: { type: 'string', maxLength: 10000 },
-      },
+      properties: noteFields,
     },
   })
   create(
@@ -73,5 +87,32 @@ export class NotesController {
   @Get(':id')
   get(@CurrentPrincipal() principal: Principal, @Param('id') id: unknown) {
     return this.notes.getOwned(principal, parseInput(noteIdSchema, id));
+  }
+  @Patch(':id')
+  @ApiOperation({ summary: 'Edit an owned note' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      minProperties: 1,
+      additionalProperties: false,
+      properties: noteFields,
+    },
+  })
+  edit(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id') id: unknown,
+    @Body() body: unknown,
+  ) {
+    return this.notes.editOwned(
+      principal,
+      parseInput(noteIdSchema, id),
+      parseInput(editNoteSchema, body),
+    );
+  }
+  @Delete(':id')
+  @HttpCode(204)
+  @ApiOperation({ summary: 'Delete an owned note' })
+  remove(@CurrentPrincipal() principal: Principal, @Param('id') id: unknown) {
+    return this.notes.removeOwned(principal, parseInput(noteIdSchema, id));
   }
 }

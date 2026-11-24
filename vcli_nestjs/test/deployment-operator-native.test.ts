@@ -1177,10 +1177,15 @@ test('source-only long project metadata and finite Firebase cleanup job agree wi
     [
       { key: 'PUBLIC_ORIGIN', required: true, secret: false },
       { key: 'ALLOWED_ORIGINS', required: true, secret: false },
+      { key: 'REDIS_URL', required: true, secret: true },
       { key: 'SESSION_SIGNING_KEYS', required: true, secret: true },
     ],
     {
-      externalResources: { database: 'database-1', firebase: 'firebase-1' },
+      externalResources: {
+        'auth-redis': 'auth-redis-1',
+        database: 'database-1',
+        firebase: 'firebase-1',
+      },
       requireExternalResources: true,
     },
   );

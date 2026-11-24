@@ -7,6 +7,7 @@ import ts from 'typescript';
 import type { ReleaseStore } from '../templates/runtime/common/src/release/release-types.js';
 import type { NativeBackupOperations } from '../templates/runtime/common/src/release/backup-types.js';
 import type { NativeCommandRunner } from '../templates/runtime/common/src/release/native-command.js';
+import { linkGeneratedDependencies } from './generated-dependencies.ts';
 
 export const releaseFixtureRoot = resolve('var/cli-release');
 type Loader = <T>(path: string) => Promise<T>;
@@ -55,23 +56,7 @@ export function releaseFixture(
       join(root, 'src/core/errors/application-error.ts'),
     );
     await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
-    try {
-      await symlink(
-        resolve(
-          `examples/reference-api${database === 'postgres' ? '-postgres' : ''}/node_modules`,
-        ),
-        join(root, 'node_modules'),
-        'dir',
-      );
-    } catch (error) {
-      if (
-        !error ||
-        typeof error !== 'object' ||
-        !('code' in error) ||
-        error.code !== 'EEXIST'
-      )
-        throw error;
-    }
+    await linkGeneratedDependencies(root);
     // This is test-owned native seed/read code, not a schema contribution in product output.
     const access =
       database === 'postgres'
@@ -229,23 +214,7 @@ export async function compileReleaseCommands(
     { recursive: true },
   );
   await writeFile(join(root, 'package.json'), '{"type":"module"}');
-  try {
-    await symlink(
-      resolve(
-        `examples/reference-api${database === 'postgres' ? '-postgres' : ''}/node_modules`,
-      ),
-      join(root, 'node_modules'),
-      'dir',
-    );
-  } catch (error) {
-    if (
-      !error ||
-      typeof error !== 'object' ||
-      !('code' in error) ||
-      error.code !== 'EEXIST'
-    )
-      throw error;
-  }
+  await linkGeneratedDependencies(root);
   const result = spawnSync(
     process.execPath,
     [

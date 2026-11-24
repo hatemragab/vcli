@@ -1,5 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import type { Transactions } from '../../core/database/transaction-context.js';
+import type {
+  TransactionContext,
+  Transactions,
+} from '../../core/database/transaction-context.js';
 import type { Principal } from '../../core/auth/principal.js';
 import type { AccountService } from '../accounts/account.service.js';
 import type { SessionService } from '../sessions/session.service.js';
@@ -8,9 +11,14 @@ import type {
   FreshIdentityProof,
   SelfProof,
 } from './fresh-identity-proof.service.js';
-import type { ProviderCleanupService } from './provider-cleanup.service.js';
+import type { ProviderCleanup } from './credential-ports.js';
 import { ApplicationError } from '../../core/errors/application-error.js';
 import { newId } from './secret-facts.js';
+
+type CleanupWriter = {
+  stage(row: ProviderCleanup, ctx: TransactionContext): Promise<void>;
+};
+
 @Injectable()
 export class AccountLifecycle {
   constructor(
@@ -19,7 +27,7 @@ export class AccountLifecycle {
     private readonly identities: IdentityService,
     private readonly sessions: SessionService,
     private readonly fresh: FreshIdentityProof,
-    private readonly cleanup: ProviderCleanupService | null,
+    private readonly cleanup: CleanupWriter | null,
   ) {}
   async act(
     actor: Principal,
@@ -29,9 +37,11 @@ export class AccountLifecycle {
   ) {
     const proof = await this.fresh.verify(actor, input, now);
     const operationId = newId();
-    const cleanupIds = Array.from({ length: 32 }, (_, index) =>
-      index === 0 ? operationId : newId(),
-    );
+    const cleanupIds = this.cleanup
+      ? Array.from({ length: 32 }, (_, index) =>
+          index === 0 ? operationId : newId(),
+        )
+      : [];
     const providerCleanup = await this.tx.run(async (ctx) => {
       await this.fresh.assertCurrent(actor, proof, now, ctx);
       const identities = await this.identities.list(actor.accountId, ctx);

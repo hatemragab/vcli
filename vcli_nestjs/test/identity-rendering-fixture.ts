@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
 import type { ProjectConfig, RenderedFile } from '../src/contracts.js';
+import { linkGeneratedDependencies } from './generated-dependencies.ts';
 
 const directory = resolve('var/cli-identity-integration');
 let rendering:
@@ -99,23 +100,7 @@ export async function selectedIdentityFixture(
   await rm(join(target, 'src'), { recursive: true, force: true });
   await mkdir(target, { recursive: true });
   await writeFile(join(target, 'package.json'), '{"type":"module"}');
-  try {
-    await symlink(
-      resolve(
-        `examples/reference-api${database === 'postgres' ? '-postgres' : ''}/node_modules`,
-      ),
-      join(target, 'node_modules'),
-      'dir',
-    );
-  } catch (error: unknown) {
-    if (
-      !error ||
-      typeof error !== 'object' ||
-      !('code' in error) ||
-      error.code !== 'EEXIST'
-    )
-      throw error;
-  }
+  await linkGeneratedDependencies(target);
   async function put(path: string, content: string) {
     const absolute = join(target, path);
     await mkdir(dirname(absolute), { recursive: true });
@@ -129,9 +114,20 @@ export async function selectedIdentityFixture(
   );
   const Database =
     database === 'postgres' ? 'PostgresDatabase' : 'MongoDatabase';
+  await mkdir(join(target, 'src/core/bootstrap'), { recursive: true });
+  await cp(
+    'templates/runtime/common/src/core/bootstrap/bootstrap-bindings.ts',
+    join(target, 'src/core/bootstrap/bootstrap-bindings.ts'),
+  );
   await put(
     'src/core/database/database.module.ts',
-    `import {Module,type DynamicModule} from '@nestjs/common';import {${Database}} from './${database === 'postgres' ? 'postgres' : 'mongo'}-database.js';@Module({}) export class DatabaseModule {static register(database:${Database}):DynamicModule{return {module:DatabaseModule,providers:[{provide:${Database},useValue:database}],exports:[${Database}]};}}`,
+    `import {Module} from '@nestjs/common';
+import {bootstrapBinding} from '../bootstrap/bootstrap-bindings.js';
+import {${Database}} from './${database === 'postgres' ? 'postgres' : 'mongo'}-database.js';
+const databaseBinding=bootstrapBinding(${Database});
+export const bindDatabase=databaseBinding.bind;
+@Module({providers:[databaseBinding.provider],exports:[${Database}]})
+export class DatabaseModule {}`,
   );
   await mkdir(join(target, 'src/core/errors'), { recursive: true });
   await cp(
@@ -164,7 +160,7 @@ export async function selectedIdentityFixture(
     'src/core/config/app-config.ts',
     `${auth === 'local' ? "import type {JwtPolicy} from '@vcli/auth-runtime/jwt';" : ''}
 ${mode === 'application' ? "import type {FirebaseActionPolicy} from '../../modules/mail/firebase-action-policy.js';" : ''}
-export type AppConfig=Readonly<{publicOrigin:string;database:{driver:'${database}';url:string};auth:{sessionTtlSeconds:number;recentAuthSeconds:number;${auth === 'local' ? 'jwtPolicy:JwtPolicy;accessTtlSeconds:number;' : 'firebaseProjectId:string;firebaseMethods:readonly string[];'}};${mode === 'reliable' || mode === 'application' ? 'mailDelivery:{activeKeyId:string;keys:Record<string,string>;maxAttempts:number;leaseMs:number;maxLifetimeMs:number};' : ''}${mode === 'application' ? 'firebaseActions:{policy:FirebaseActionPolicy;continueUrl:string;applicationName:string;deliveryLifetimeMs:number};' : ''}}>;`,
+export type AppConfig=Readonly<{publicOrigin:string;database:{driver:'${database}';url:string};auth:{rateLimitRedisUrl:string;rateLimitNamespace:string;sessionTtlSeconds:number;recentAuthSeconds:number;${auth === 'local' ? 'jwtPolicy:JwtPolicy;accessTtlSeconds:number;' : 'firebaseProjectId:string;firebaseMethods:readonly string[];'}};${mode === 'reliable' || mode === 'application' ? 'mailDelivery:{activeKeyId:string;keys:Record<string,string>;maxAttempts:number;leaseMs:number;maxLifetimeMs:number};' : ''}${mode === 'application' ? 'firebaseActions:{policy:FirebaseActionPolicy;continueUrl:string;applicationName:string;deliveryLifetimeMs:number};' : ''}}>;`,
   );
   const options: ts.CompilerOptions = {
     target: ts.ScriptTarget.ES2023,

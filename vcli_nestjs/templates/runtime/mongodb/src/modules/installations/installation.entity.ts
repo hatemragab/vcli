@@ -17,7 +17,7 @@ export const installationSchema = new Schema<Installation>(
     createdAt: Number,
   },
   {
-    collection: 'ref_installations',
+    collection: 'installations',
     autoCreate: false,
     autoIndex: false,
     versionKey: false,

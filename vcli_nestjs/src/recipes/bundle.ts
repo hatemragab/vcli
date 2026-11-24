@@ -56,13 +56,7 @@ export async function runtime(
   try {
     return await bundled(path, variant);
   } catch (error) {
-    if (
-      !error ||
-      typeof error !== 'object' ||
-      !('code' in error) ||
-      error.code !== 'ENOENT'
-    )
-      throw error;
+    if (!missingTemplate(error)) throw error;
     return bundled(path);
   }
 }

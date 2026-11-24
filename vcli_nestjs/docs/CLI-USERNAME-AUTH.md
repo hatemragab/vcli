@@ -1,6 +1,6 @@
-# Mail-free local username authentication
+# Full local username authentication
 
-The local auth recipe supports an explicit build-time `identifier: 'username'` selection. Existing `identifier: 'email'` behavior remains the default. CLI selection is `--auth local --local-identifier username`; this profile requires the selected native database and does not require mail. Ordinary add/regeneration must not silently convert an existing credential namespace.
+Use `--auth local --local-auth-profile full --local-identifier username` to select the full username/password flow backed by the selected native database. This flow is mail-free and retains installation and session management. Basic local auth also supports usernames and is the default when `--local-auth-profile` is omitted for a new app. Ordinary add/regeneration preserves the installed profile and credential namespace. [Basic local authentication](CLI-IDENTITY.md#basic-local-authentication)
 
 ## Runtime and source selection
 

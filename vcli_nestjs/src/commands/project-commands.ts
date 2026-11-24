@@ -12,12 +12,34 @@ import { checkSelectedConfig } from './config-check.js';
 import { explainPath } from './explain-path.js';
 import { queryLogs } from './log-query.js';
 import type { CliRuntime } from './command-context.js';
+import { runNotesSmoke } from './notes-smoke.js';
 
 export function registerProjectCommands(
   program: Command,
   runtime: CliRuntime,
   environment: () => NodeJS.ProcessEnv,
 ): void {
+  program
+    .command('smoke')
+    .description('Run selected HTTP checks against a local development app')
+    .command('notes')
+    .description(
+      'Verify Notes, private media when selected, and device isolation',
+    )
+    .requiredOption('--url <origin>', 'Loopback API origin')
+    .requiredOption(
+      '--accounts-file <file>',
+      'Owner-only JSON with two verified local accounts',
+    )
+    .action(async (options: { url: string; accountsFile: string }) => {
+      runtime.setOperation('smoke.notes');
+      runtime.emit({
+        schemaVersion: 1,
+        operation: 'smoke.notes',
+        status: 'completed',
+        data: await runNotesSmoke(options),
+      });
+    });
   program
     .command('catalog')
     .description('List bundled recipe choices, defaults and command examples')

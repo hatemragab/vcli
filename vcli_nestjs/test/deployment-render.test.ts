@@ -7,6 +7,7 @@ import { format } from 'prettier';
 import { Script } from 'node:vm';
 import type { ProjectConfig, RecipeCatalog, Recipe } from '../src/contracts.ts';
 import { deploymentFiles } from '../dist/recipes/render-deployment.js';
+import { diagnosticsFiles } from '../dist/recipes/render-diagnostics.js';
 import { serviceFiles } from '../dist/recipes/render-services.js';
 import { planInit, planAdd, applyPlan } from '../dist/engine/index.js';
 
@@ -118,7 +119,7 @@ test('all three native artifact profiles are deterministic, managed and distinct
     const docker = get('ops/Dockerfile');
     assert.match(docker, /npm ci --install-links/);
     assert.match(docker, /npm prune --omit=dev --install-links/);
-    assert.match(docker, /test ! -L node_modules\/@vcli\/auth-runtime/);
+    assert.doesNotMatch(docker, /node_modules\/@vcli\/auth-runtime/);
     assert.match(docker, /USER node/);
     assert.match(docker, /install -d -m 0700 -o node -g node/);
     const runtime = docker.split(' AS runtime\n')[1]!;
@@ -162,30 +163,72 @@ test('private sentinel never enters artifacts, build arguments or public plan', 
   }
 });
 
-test('generated Docker shell steps and health JavaScript have valid syntax without executing them', () => {
-  const files = deploymentFiles(
-    config('dokploy', ['database.postgres', 'diagnostics.local']),
-    fields,
-  );
-  const docker = files.find((file) => file.path === 'ops/Dockerfile')!.content;
-  for (const line of docker
-    .split('\n')
-    .filter((line) => line.startsWith('RUN '))) {
-    const result = spawnSync('sh', ['-n'], {
-      input: line.slice(4),
-      encoding: 'utf8',
-    });
-    assert.equal(result.status, 0, result.stderr);
+test('Docker shell steps copy only selected diagnostic launchers and retain valid syntax', async () => {
+  const local = 'scripts/diagnostics-mcp.mjs';
+  const remote = [
+    'scripts/diagnostics-private-profile.mjs',
+    'scripts/diagnostics-remote-backend.mjs',
+  ];
+  const profiles = [
+    { options: {}, scripts: [] },
+    { options: { mcp: true }, scripts: [local] },
+    { options: { reader: 'restricted-remote-read' }, scripts: remote },
+    {
+      options: { mcp: true, reader: 'restricted-remote-read' },
+      scripts: [local, ...remote, 'scripts/diagnostics-remote-mcp.mjs'],
+    },
+  ] as const;
+  for (const { options, scripts } of profiles) {
+    const selected = config('dokploy', [
+      'database.postgres',
+      'diagnostics.local',
+    ]);
+    selected.capabilities.diagnostics!.options = { ...options };
+    const diagnostics = await diagnosticsFiles(selected);
+    assert.deepEqual(
+      diagnostics
+        .map(({ path }) => path)
+        .filter((path) => path.startsWith('scripts/')),
+      scripts,
+    );
+    const docker = deploymentFiles(selected, fields).find(
+      ({ path }) => path === 'ops/Dockerfile',
+    )!.content;
+    assert.deepEqual(
+      docker.match(/scripts\/diagnostics-[a-z-]+\.mjs/g) ?? [],
+      scripts,
+    );
+    assert.doesNotMatch(docker, /scripts\/diagnostics-\*/);
+    assert.equal(
+      docker.includes('/runtime-assets/scripts'),
+      scripts.length > 0,
+    );
+    for (const line of docker
+      .split('\n')
+      .filter((line) => line.startsWith('RUN '))) {
+      const result = spawnSync('sh', ['-n'], {
+        input: line.slice(4),
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, 0, result.stderr);
+    }
+    const match = /CMD node -e "([^"]+)"/.exec(docker);
+    assert.ok(match);
+    assert.doesNotThrow(() => new Script(match[1]!));
+    const command = /^CMD (\[.+\])$/m.exec(docker);
+    assert.ok(command);
+    assert.deepEqual(JSON.parse(command[1]!), ['node', 'dist/main.js']);
   }
-  const match = /CMD node -e "([^"]+)"/.exec(docker);
-  assert.ok(match);
-  assert.doesNotThrow(() => new Script(match[1]!));
-  const command = /^CMD (\[.+\])$/m.exec(docker);
-  assert.ok(command);
-  assert.deepEqual(JSON.parse(command[1]!), ['node', 'dist/main.js']);
 });
 
 test('native Compose config parses raw and formatted JSON/YAML profiles without services or pulls', async (t) => {
+  const compose = spawnSync('docker', ['compose', 'version'], {
+    encoding: 'utf8',
+  });
+  if (compose.status !== 0) {
+    t.skip('Docker Compose CLI is unavailable');
+    return;
+  }
   const root = await fixture(t);
   for (const target of ['dokploy', 'coolify']) {
     for (const file of deploymentFiles(

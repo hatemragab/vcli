@@ -1,6 +1,6 @@
 import type { ProjectConfig, RenderedFile } from '../contracts.js';
 import { bundled, file } from './bundle.js';
-import { selection, usernameAuth } from './selection.js';
+import { basicLocalAuth, selection, usernameAuth } from './selection.js';
 
 function nativeMailDatabase(config: ProjectConfig): 'mongodb' | 'postgres' {
   const selected = selection(config, 'database');
@@ -24,10 +24,17 @@ export async function mailFiles(
   const capture = selected === 'mail.capture',
     http = selected === 'mail.http',
     reliable = option === true;
+  const senderClass = capture
+    ? 'CaptureMailService'
+    : http
+      ? 'HttpMailService'
+      : 'SmtpMailService';
   if (http && config.capabilities.mail!.options.provider !== 'resend')
     throw new Error('UNSUPPORTED_HTTP_MAIL_PROVIDER');
   const local =
-    selection(config, 'auth') === 'auth.local' && !usernameAuth(config);
+    selection(config, 'auth') === 'auth.local' &&
+    !basicLocalAuth(config) &&
+    !usernameAuth(config);
   const database = reliable || local ? nativeMailDatabase(config) : undefined;
   const databaseClass =
     database === 'mongodb' ? 'MongoDatabase' : 'PostgresDatabase';
@@ -57,9 +64,9 @@ export async function mailFiles(
   files.push(
     file(
       'src/modules/mail/mail.module.ts',
-      `import {Module,type DynamicModule} from '@nestjs/common';
+      `import {Module} from '@nestjs/common';
+import {bootstrapBinding,type BootstrapBinding} from '../../core/bootstrap/bootstrap-bindings.js';
 import type {AppConfig} from '../../core/config/app-config.js';
-import type {MailSubmitter} from '../../core/mail/mail-submitter.js';
 ${capture || reliable ? "import {ApplicationError} from '../../core/errors/application-error.js';" : ''}
 import {MailService} from './mail.service.js';
 ${
@@ -77,7 +84,11 @@ import {MailPayloadCipher} from './mail-payload-cipher.js';
 import {MailIntentService} from './mail-intent.service.js';`
     : ''
 }
-export function createMailSender(config:AppConfig):${capture ? 'CaptureMailService' : http ? 'HttpMailService' : 'SmtpMailService'} {
+const senderBinding=bootstrapBinding<MailService>(MailService);
+${reliable ? 'const intentsBinding=bootstrapBinding<MailIntentService>(MailIntentService);' : ''}
+@Module({providers:[senderBinding.provider${reliable ? ',intentsBinding.provider' : ''}],exports:[MailService${reliable ? ',MailIntentService' : ''}]})
+export class MailModule {}
+export function createMailSender(config:AppConfig):${senderClass} {
 ${
   capture
     ? "if(config.environment==='production')throw new ApplicationError('UNSAFE_PRODUCTION_CAPTURE',500);return new CaptureMailService(config.mail.maxCaptured,Date.now,undefined,900000,config.environment);"
@@ -95,27 +106,28 @@ return {sender,inspect:()=>{pruneCapture(capture,now());return structuredClone(c
     : ''
 }
 export type MailRuntimeDependencies=Readonly<{sender?:MailService}>;
-export type MailRuntime=Readonly<{sender:MailService;intents:${reliable ? 'MailIntentService' : 'undefined'};module:DynamicModule;close():Promise<void>}>;
+export type MailRuntime=Readonly<{sender:MailService;intents:${reliable ? 'MailIntentService' : 'undefined'};bindings:readonly BootstrapBinding[];close():Promise<void>}>;
 /** No database or provider I/O during construction. The caller owns the database lifecycle. */
 export function createMailRuntime(config:AppConfig,${reliable ? `database?:${databaseClass}` : '_database?:unknown'},dependencies:MailRuntimeDependencies={}):MailRuntime {
 ${reliable ? "if(!database)throw new ApplicationError('MAIL_DATABASE_REQUIRED',500);" : ''}
 ${capture ? "if(config.environment==='production')throw new ApplicationError('UNSAFE_PRODUCTION_CAPTURE',500);" : ''}
-const ownedSender=dependencies.sender?undefined:createMailSender(config);
-const sender:MailService=dependencies.sender??ownedSender!;
+${
+  capture
+    ? 'const sender:MailService=dependencies.sender??createMailSender(config);'
+    : `let ownedSender:${senderClass}|undefined;
+const sender:MailService=dependencies.sender??(ownedSender=createMailSender(config));
+let closed=false;`
+}
+${reliable && !capture ? 'try {' : ''}
 ${
   reliable
-    ? `${capture ? '' : 'try {'}
-const policy=config.mailDelivery;
-const intents=new MailIntentService(new MailIntentStore(database),new MailPayloadCipher(policy.activeKeyId,policy.keys),sender,{maxAttempts:policy.maxAttempts,leaseMs:policy.leaseMs,maxLifetimeMs:policy.maxLifetimeMs});
-let closed=false;
-return {sender,intents,module:MailModule.register(sender,intents),async close(){if(closed)return;closed=true;${capture ? '' : 'ownedSender?.close();'}}};
-${capture ? '' : '}catch(error){ownedSender?.close();throw error;}'}`
-    : `let closed=false;
-return {sender,intents:undefined,module:MailModule.register(sender),async close(){if(closed)return;closed=true;${capture ? '' : 'ownedSender?.close();'}}};`
+    ? `const policy=config.mailDelivery;
+const intents=new MailIntentService(new MailIntentStore(database),new MailPayloadCipher(policy.activeKeyId,policy.keys),sender,{maxAttempts:policy.maxAttempts,leaseMs:policy.leaseMs,maxLifetimeMs:policy.maxLifetimeMs});`
+    : ''
 }
+return {sender,${reliable ? 'intents' : 'intents:undefined'},bindings:[senderBinding.bind(sender)${reliable ? ',intentsBinding.bind(intents)' : ''}],${capture ? 'close(){return Promise.resolve();}' : 'async close(){if(closed)return;closed=true;ownedSender?.close();}'}};
+${reliable && !capture ? '}catch(error){ownedSender?.close();throw error;}' : ''}
 }
-@Module({})
-export class MailModule {static register(sender:MailSubmitter${reliable ? ',intents?:MailIntentService' : ''}):DynamicModule{return {module:MailModule,providers:[{provide:MailService,useValue:sender}${reliable ? ',...(intents?[{provide:MailIntentService,useValue:intents}]:[])' : ''}],exports:[MailService${reliable ? ',...(intents?[MailIntentService]:[])' : ''}]};}}
 `,
     ),
   );

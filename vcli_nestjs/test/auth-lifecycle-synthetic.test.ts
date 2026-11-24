@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import { once } from 'node:events';
+import { createServer, type Socket } from 'node:net';
 import { test } from 'node:test';
 import { identityFixture } from './auth-lifecycle-fixture.ts';
 import { syntheticIdentityPorts } from './auth-lifecycle-ports.ts';
@@ -156,6 +158,110 @@ for (const database of ['mongodb', 'postgres'] as const) {
     await assert.rejects(h.enroll(h.capability, h.facts.newSecret()), {
       code: 'INSTALLATION_PROOF_REQUIRED',
     });
+  });
+
+  test(`synthetic ${database}: device listing and revocation isolate owned installations`, async () => {
+    const h = await synthetic(database);
+    const current = await h.enroll();
+    const device = h.facts.newSecret();
+    const firstSecret = h.facts.newSecret();
+    const secondSecret = h.facts.newSecret();
+    const first = await h.enrollment.enroll(h.getProof(), h.facts.newId(), {
+      ...h.sessionFacts(firstSecret, device, now + 1),
+      platform: 'android',
+    });
+    const second = await h.enroll(secondSecret, device, now + 2);
+    const siblingDevice = h.facts.newSecret();
+    const sibling = await h.enroll(h.facts.newSecret(), siblingDevice, now + 3);
+    assert.equal(first.installationId, second.installationId);
+
+    const originalProof = h.getProof();
+    h.proof({ uid: 'foreign-installation-owner' });
+    const foreign = await h.enroll(
+      h.facts.newSecret(),
+      h.facts.newSecret(),
+      now + 4,
+    );
+    h.proof(originalProof);
+
+    const actor = await h.authority.current(current.id);
+    const devices = await h.management.listDevices(actor, now + 5);
+    assert.deepEqual(
+      devices.map((item: { installationId: string }) => item.installationId),
+      [current.installationId, sibling.installationId, first.installationId],
+    );
+    assert.equal(devices[0].current, true);
+    assert.deepEqual(devices[2], {
+      installationId: first.installationId,
+      installationGeneration: first.installationGeneration,
+      platform: 'android',
+      label: 'Android device',
+      createdAt: now + 1,
+      lastSignInAt: now + 2,
+      sessionCount: 2,
+      current: false,
+    });
+
+    for (const id of [foreign.installationId, h.facts.newId()]) {
+      await assert.rejects(
+        h.management.revoke(actor, 'installation', id, now + 5),
+        { code: 'INSTALLATION_NOT_FOUND' },
+      );
+    }
+    await assert.rejects(
+      h.management.revoke(
+        actor,
+        'installation',
+        first.installationId,
+        now + 61000,
+      ),
+      { code: 'RECENT_AUTH_REQUIRED' },
+    );
+    h.rollback();
+    await assert.rejects(
+      h.management.revoke(actor, 'installation', first.installationId, now + 5),
+      { message: 'CONTROLLED_ROLLBACK' },
+    );
+    assert.equal((await h.authority.current(first.id)).sessionId, first.id);
+    assert.equal((await h.authority.current(second.id)).sessionId, second.id);
+
+    await h.management.revoke(
+      actor,
+      'installation',
+      first.installationId,
+      now + 5,
+    );
+    for (const session of [first, second])
+      await assert.rejects(h.authority.current(session.id), {
+        code: 'SESSION_REVOKED',
+      });
+    for (const session of [current, sibling, foreign])
+      assert.equal(
+        (await h.authority.current(session.id)).sessionId,
+        session.id,
+      );
+    assert.deepEqual(
+      (await h.management.listDevices(actor, now + 5)).map(
+        (item: { installationId: string }) => item.installationId,
+      ),
+      [current.installationId, sibling.installationId],
+    );
+    await assert.rejects(h.enroll(firstSecret, device, now + 6), {
+      code: 'SESSION_REVOKED',
+    });
+    await assert.rejects(h.enroll(h.facts.newSecret(), device, now + 6), {
+      code: 'REAUTHENTICATION_REQUIRED',
+    });
+    assert.equal(
+      (await h.enroll(h.facts.newSecret(), siblingDevice, now + 6))
+        .installationId,
+      sibling.installationId,
+    );
+    h.proof({ authenticatedAt: now + 7 });
+    assert.equal(
+      (await h.enroll(h.facts.newSecret(), device, now + 7)).installationId,
+      first.installationId,
+    );
   });
 }
 
@@ -648,36 +754,84 @@ test('actual crypto wrappers: strict Unicode/input, changed Argon policy, JWT ke
   );
 });
 
-test('durable limiter wrapper is fail-closed for rate storage failures', async () => {
+test('Redis identity rate limiter bounds a stalled handshake and command, recovers, and closes', async () => {
   const load = await fixture('postgres'),
-    { IdentityRateLimits } = await load(
-      'modules/identity/identity-rate-limits.service',
+    { RedisIdentityRateStore } = await load(
+      'modules/identity/redis-identity-rate-store',
     );
-  const tx = {
-    async run(work: (ctx: object) => Promise<unknown>) {
-      return work({});
-    },
-  };
-  const limited = new IdentityRateLimits(tx, {
-    async spendRate() {
-      return false;
-    },
+  const privatePassword = 'synthetic-private-redis-password';
+  const sockets = new Set<Socket>();
+  let allowHandshake = false;
+  let allowCommand = false;
+  let handshakes = 0;
+  let commands = 0;
+  const peer = createServer((socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+    socket.on('error', () => {});
+    socket.on('data', (chunk) => {
+      const command = /^\*\d+\r\n\$\d+\r\n([A-Z]+)\r\n/.exec(
+        chunk.toString(),
+      )?.[1];
+      if (command === 'AUTH') {
+        handshakes++;
+        if (allowHandshake) socket.write('+OK\r\n');
+      }
+      if (command === 'EVAL') {
+        commands++;
+        if (allowCommand) socket.write(':1\r\n');
+      }
+    });
   });
-  await assert.rejects(
-    limited.spend([{ key: 'private-hash', limit: 3 }], now),
-    { status: 429 },
+  const listening = once(peer, 'listening');
+  peer.listen(0, '127.0.0.1');
+  await listening;
+  const address = peer.address();
+  assert.ok(address && typeof address !== 'string');
+  const store = new RedisIdentityRateStore(
+    `redis://:${privatePassword}@127.0.0.1:${address.port}`,
+    'synthetic-identity:test',
   );
-  const unavailable = new IdentityRateLimits(tx, {
-    async spendRate() {
-      throw new Error('PRIVATE_DATABASE_DETAILS');
-    },
-  });
-  await assert.rejects(
-    unavailable.spend([{ key: 'private-hash', limit: 3 }], now),
-    (error: unknown) =>
-      error instanceof Error &&
-      !error.message.includes('PRIVATE_DATABASE_DETAILS'),
-  );
+  const entries = [{ key: 'private-peer-hash', limit: 3 }];
+  async function expectUnavailable(): Promise<void> {
+    const started = performance.now();
+    await assert.rejects(
+      store.spend(entries),
+      (error: unknown) =>
+        error instanceof Error &&
+        'code' in error &&
+        error.code === 'IDENTITY_RATE_UNAVAILABLE' &&
+        'status' in error &&
+        error.status === 503 &&
+        !error.message.includes(privatePassword),
+    );
+    assert.ok(performance.now() - started < 2_500, 'bounded request deadline');
+  }
+  try {
+    await expectUnavailable();
+    assert.equal(handshakes, 1);
+    assert.equal(commands, 0);
+    allowHandshake = true;
+    await expectUnavailable();
+    assert.equal(handshakes, 2);
+    assert.equal(commands, 1);
+    allowCommand = true;
+    await store.spend(entries);
+    assert.equal(handshakes, 3);
+    assert.equal(commands, 2);
+    const socket = [...sockets].at(-1);
+    assert.ok(socket);
+    const disconnected = once(socket, 'close');
+    store.close();
+    store.close();
+    await disconnected;
+    await expectUnavailable();
+    assert.equal(handshakes, 3);
+  } finally {
+    store.close();
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => peer.close(() => resolve()));
+  }
 });
 
 test('synthetic local self actions require the current password and atomically disable/delete without claiming business erasure', async () => {

@@ -1,5 +1,6 @@
 import type { ProjectConfig, RenderedFile } from '../contracts.js';
 import { file, runtime } from './bundle.js';
+import { selectIdentityTemplate } from './identity-template.js';
 import { selection, usernameAuth } from './selection.js';
 import {
   removeBetween,
@@ -52,6 +53,7 @@ export async function identityFiles(
     'modules/identity/identity.service.ts',
     'modules/identity/identity-authority.service.ts',
     'modules/identity/identity-rate-limits.service.ts',
+    'modules/identity/redis-identity-rate-store.ts',
     'modules/identity/secret-facts.ts',
     'modules/identity/credential-ports.ts',
     'modules/identity/rate-request.ts',
@@ -63,9 +65,6 @@ export async function identityFiles(
     'modules/identity/self-account.controller.ts',
     'modules/identity/installation-lifecycle.service.ts',
     'modules/identity/installation-lifecycle.controller.ts',
-    // Nullable same-owner type dependencies exist in both modes, without provider SDK imports.
-    'modules/identity/provider-cleanup.entity.ts',
-    'modules/identity/provider-cleanup.service.ts',
     ...(db === 'mongodb'
       ? [
           'modules/identity/identity-lifecycle-migration.ts',
@@ -95,6 +94,8 @@ export async function identityFiles(
           'modules/identity/firebase-identity.controller.ts',
           'modules/identity/provider-links.service.ts',
           'modules/identity/provider-links.controller.ts',
+          'modules/identity/provider-cleanup.entity.ts',
+          'modules/identity/provider-cleanup.service.ts',
           'modules/identity/provider-cleanup-dispatcher.service.ts',
           ...(application
             ? [
@@ -187,6 +188,8 @@ export const identityRequestBodies={firebaseBootstrap:{required:true,description
       await runtime('migrations/002-identity-lifecycle.sql', db),
     );
   }
+  for (const entry of files)
+    entry.content = selectIdentityTemplate(entry.content, entry.path, config);
   return files;
 }
 
@@ -203,24 +206,103 @@ function identityModule(
   const controller = username
     ? 'UsernameIdentityController'
     : 'LocalIdentityController';
-  return `import {Module,type DynamicModule,type Provider} from '@nestjs/common';
+  const bindings: [
+    name: string,
+    token: string,
+    value: string,
+    type?: string,
+  ][] = [
+    ['identityService', 'IdentityService', 'identities'],
+    ['identityAuthority', 'IdentityAuthority', 'authority'],
+    ['identityConfig', 'IDENTITY_CONFIG', 'config', 'AppConfig'],
+    ['identityRateLimits', 'IdentityRateLimits', 'rateLimits'],
+    ['freshIdentityProof', 'FreshIdentityProof', 'fresh'],
+    ['accountLifecycle', 'AccountLifecycle', 'lifecycle'],
+    ['installationLifecycle', 'InstallationLifecycle', 'installationLifecycle'],
+  ];
+  const controllers = [
+    'SelfAccountController',
+    'InstallationLifecycleController',
+  ];
+  if (local) {
+    bindings.push(
+      ['accessTokens', 'ACCESS_TOKENS', 'tokens', 'AccessTokens'],
+      [
+        'credentials',
+        credentials,
+        `new ${credentials}(db,accounts,identities,passwords,issuer)`,
+      ],
+    );
+    if (email) {
+      bindings.push([
+        'actionTokens',
+        'ActionTokens',
+        `new ActionTokens(db,accounts,identities,sessions,passwords,mail${reliable ? ',delivery,config.mailDelivery.maxLifetimeMs' : ''})`,
+      ]);
+    }
+    bindings.push(
+      [
+        'refreshSessions',
+        'RefreshSessions',
+        'new RefreshSessions(db,accounts,installations,sessions)',
+      ],
+      [
+        'changePassword',
+        'ChangePassword',
+        'new ChangePassword(db,accounts,identities,installations,sessions,passwords,config.auth.recentAuthSeconds*1000)',
+      ],
+    );
+    controllers.push(
+      controller,
+      ...(email ? ['ActionTokensController'] : []),
+      'ChangePasswordController',
+    );
+  } else {
+    bindings.push(
+      ['firebaseVerifier', 'FIREBASE_VERIFIER', 'firebase', 'FirebaseVerifier'],
+      [
+        'firebaseEnrollment',
+        'FirebaseEnrollment',
+        'new FirebaseEnrollment(db,accounts,identities,issuer,config.auth.firebaseProjectId,config.auth.firebaseMethods,config.auth.recentAuthSeconds*1000)',
+      ],
+      ['providerCleanupService', 'ProviderCleanupService', 'cleanupStore'],
+      ['providerCleanupDispatcher', 'ProviderCleanupDispatcher', 'cleanup'],
+      [
+        'providerLinks',
+        'ProviderLinks',
+        'new ProviderLinks(db,identities,sessions,fresh,firebase,cleanupStore,config.auth.firebaseProjectId,config.auth.firebaseMethods,config.auth.recentAuthSeconds*1000)',
+      ],
+    );
+    controllers.push('FirebaseIdentityController', 'ProviderLinksController');
+    if (application) {
+      bindings.push([
+        'firebaseActions',
+        'FirebaseActions',
+        'new FirebaseActions(db,fresh,firebase,links,delivery,config.firebaseActions.continueUrl,config.firebaseActions.deliveryLifetimeMs)',
+      ]);
+      controllers.push('FirebaseActionsController');
+    }
+  }
+  return `import {Module} from '@nestjs/common';
+import {bootstrapBinding,type BootstrapBinding} from '../../core/bootstrap/bootstrap-bindings.js';
 import type {AppConfig} from '../../core/config/app-config.js';
 import type {PrincipalAuthority} from '../../core/auth/principal-authority.js';
 ${email || application ? "import {ApplicationError} from '../../core/errors/application-error.js';" : ''}
-import {HttpSecurityModule} from '../../core/http/http-security.module.js';
+import {HttpSecurityModule,bindPrincipalAuthority} from '../../core/http/http-security.module.js';
 import {DatabaseModule} from '../../core/database/database.module.js';
 import type {${databaseClass}} from '../../core/database/${db === 'mongodb' ? 'mongo' : 'postgres'}-database.js';
 import {AccountService} from '../accounts/account.service.js';
-import {AccountModule} from '../accounts/account.module.js';
+import {AccountModule,bindAccountService} from '../accounts/account.module.js';
 import {InstallationService} from '../installations/installation.service.js';
-import {InstallationModule} from '../installations/installation.module.js';
+import {InstallationModule,bindInstallationService} from '../installations/installation.module.js';
 import {SessionService} from '../sessions/session.service.js';
 import {SessionIssuer} from '../sessions/session-issuer.service.js';
 import {SessionManagement} from '../sessions/session-management.service.js';
-import {SessionsModule} from '../sessions/sessions.module.js';
+import {SessionsModule,bindSessionService,bindSessionIssuer,bindSessionManagement} from '../sessions/sessions.module.js';
 import {IdentityService} from './identity.service.js';
 import {IdentityAuthority} from './identity-authority.service.js';
 import {IdentityRateLimits} from './identity-rate-limits.service.js';
+import {RedisIdentityRateStore} from './redis-identity-rate-store.js';
 import {FreshIdentityProof} from './fresh-identity-proof.service.js';
 import {AccountLifecycle} from './account-lifecycle.service.js';
 import {SelfAccountController} from './self-account.controller.js';
@@ -233,6 +315,7 @@ ${
     ? `${email ? "import type {MailSubmitter} from '../../core/mail/mail-submitter.js';" : ''}
 import {ArgonPasswords} from './argon-passwords.service.js';
 import {JoseAccessTokens} from './jose-access-tokens.service.js';
+import type {AccessTokens} from './credential-ports.js';
 import {RefreshSessions} from '../sessions/refresh-sessions.service.js';
 import {${credentials}} from './${username ? 'username' : 'local'}-credentials.service.js';
 ${email ? "import {ActionTokens} from './action-tokens.service.js';" : ''}
@@ -260,22 +343,30 @@ import {FirebaseActionsController} from './firebase-actions.controller.js';`
 export type FirebaseIdentityProvider=FirebaseVerifier & FirebaseCleanup & {close():Promise<void>;${application ? "actionLinksAuth():Pick<Auth,'generateEmailVerificationLink'|'generatePasswordResetLink'>;" : ''}};
 export type IdentityRuntimeDependencies=Readonly<{firebase?:FirebaseIdentityProvider}>;`
 }
-export type IdentityRuntime=Readonly<{authority:PrincipalAuthority;module:DynamicModule;${local ? '' : 'cleanup:ProviderCleanupDispatcher;'}close():Promise<void>}>;
-@Module({})
+${bindings.map(([name, token, , type]) => `const ${name}Binding=bootstrapBinding${type ? `<${type}>` : ''}(${token});`).join('\n')}
+@Module({
+imports:[DatabaseModule,HttpSecurityModule,AccountModule,InstallationModule,SessionsModule],
+controllers:[${controllers.join(',')}],
+providers:[${bindings.map(([name]) => `${name}Binding.provider`).join(',')}],
+exports:[HttpSecurityModule,IdentityService,IdentityAuthority,FreshIdentityProof,AccountLifecycle,InstallationLifecycle,AccountModule,InstallationModule,SessionsModule${local ? '' : ',ProviderLinks,ProviderCleanupDispatcher'}],
+})
 export class IdentityModule {}
+
+export type IdentityRuntime=Readonly<{authority:PrincipalAuthority;bindings:readonly BootstrapBinding[];${local ? '' : 'cleanup:ProviderCleanupDispatcher;'}close():Promise<void>}>;
 export async function createIdentityRuntime(config:AppConfig,db:${databaseClass}${local ? (username ? '' : ',mail:MailSubmitter,delivery?:ActionDeliveryWriter') : application ? ',delivery:ActionDeliveryWriter,dependencies:IdentityRuntimeDependencies={}' : ',dependencies:IdentityRuntimeDependencies={}'}):Promise<IdentityRuntime>{
 ${email ? (reliable ? "if(!delivery)throw new ApplicationError('RELIABLE_ACTION_DELIVERY_REQUIRED',500);" : "if(delivery)throw new ApplicationError('UNSELECTED_RELIABLE_ACTION_DELIVERY',500);") : application ? "if(!delivery)throw new ApplicationError('RELIABLE_ACTION_DELIVERY_REQUIRED',500);" : ''}
 const accounts=new AccountService(db),identities=new IdentityService(db),installations=new InstallationService(db),sessions=new SessionService(db);
 const issuer=new SessionIssuer(accounts,installations,sessions);
 const management=new SessionManagement(db,accounts,identities,installations,sessions,config.auth.recentAuthSeconds*1000);
+const rateLimits=new RedisIdentityRateStore(config.auth.rateLimitRedisUrl,config.auth.rateLimitNamespace);
 ${
   local
     ? `const tokens=new JoseAccessTokens(config.auth.jwtPolicy);
 const passwords=await ArgonPasswords.create();
-const close=async():Promise<void>=>{};`
+const close=async():Promise<void>=>{rateLimits.close();};`
     : `const firebase=dependencies.firebase??new FirebaseTokenVerifier(config.auth.firebaseProjectId);
 let closing:Promise<void>|undefined;
-const close=():Promise<void>=>closing??=Promise.resolve().then(()=>firebase.close());
+const close=():Promise<void>=>closing??=Promise.resolve().then(()=>{rateLimits.close();return firebase.close();});
 try {`
 }
 const authority=new IdentityAuthority(db,accounts,installations,sessions,'${local ? 'local' : 'firebase'}',${local ? '[],tokens,null' : 'config.auth.firebaseMethods,null,firebase'});
@@ -289,21 +380,11 @@ const cleanup=new ProviderCleanupDispatcher(db,identities,cleanupStore,firebase)
 const lifecycle=new AccountLifecycle(db,accounts,identities,sessions,fresh,${local ? 'null' : 'cleanupStore'});
 const installationLifecycle=new InstallationLifecycle(db,installations,sessions,fresh);
 ${application ? `const links=new FirebaseActionLinksService(firebase.actionLinksAuth(),config.firebaseActions.policy,config.firebaseActions.applicationName);` : ''}
-const providers:Provider[]=[
-{provide:IdentityService,useValue:identities},{provide:IdentityAuthority,useValue:authority},{provide:IDENTITY_CONFIG,useValue:config},{provide:IdentityRateLimits,useValue:new IdentityRateLimits(db,identities)},
-{provide:FreshIdentityProof,useValue:fresh},{provide:AccountLifecycle,useValue:lifecycle},{provide:InstallationLifecycle,useValue:installationLifecycle},
-${
-  local
-    ? `{provide:ACCESS_TOKENS,useValue:tokens},{provide:${credentials},useValue:new ${credentials}(db,accounts,identities,passwords,issuer)},
-${email ? `{provide:ActionTokens,useValue:new ActionTokens(db,accounts,identities,sessions,passwords,mail${reliable ? ',delivery,config.mailDelivery.maxLifetimeMs' : ''})},` : ''}
-{provide:RefreshSessions,useValue:new RefreshSessions(db,accounts,installations,sessions)},
-{provide:ChangePassword,useValue:new ChangePassword(db,accounts,identities,installations,sessions,passwords,config.auth.recentAuthSeconds*1000)}`
-    : `{provide:FIREBASE_VERIFIER,useValue:firebase},{provide:FirebaseEnrollment,useValue:new FirebaseEnrollment(db,accounts,identities,issuer,config.auth.firebaseProjectId,config.auth.firebaseMethods,config.auth.recentAuthSeconds*1000)},
-{provide:ProviderCleanupService,useValue:cleanupStore},{provide:ProviderCleanupDispatcher,useValue:cleanup},
-{provide:ProviderLinks,useValue:new ProviderLinks(db,identities,sessions,fresh,firebase,cleanupStore,config.auth.firebaseProjectId,config.auth.firebaseMethods,config.auth.recentAuthSeconds*1000)}${application ? ',\n{provide:FirebaseActions,useValue:new FirebaseActions(db,fresh,firebase,links,delivery,config.firebaseActions.continueUrl,config.firebaseActions.deliveryLifetimeMs)}' : ''}`
-}
-];
-return {authority,${local ? '' : 'cleanup,'}module:{module:IdentityModule,imports:[DatabaseModule.register(db),HttpSecurityModule.register(authority),AccountModule.register(accounts,authority),InstallationModule.register(installations),SessionsModule.register(sessions,issuer,management,authority)],controllers:[SelfAccountController,InstallationLifecycleController,${local ? controller + (email ? ',ActionTokensController' : '') + ',ChangePasswordController' : 'FirebaseIdentityController,ProviderLinksController' + (application ? ',FirebaseActionsController' : '')}],providers,exports:[HttpSecurityModule,IdentityService,IdentityAuthority,FreshIdentityProof,AccountLifecycle,InstallationLifecycle,AccountModule,InstallationModule,SessionsModule${local ? '' : ',ProviderLinks,ProviderCleanupDispatcher'}]},close};
+return {authority,${local ? '' : 'cleanup,'}bindings:[
+bindPrincipalAuthority(authority),bindAccountService(accounts),bindInstallationService(installations),
+bindSessionService(sessions),bindSessionIssuer(issuer),bindSessionManagement(management),
+${bindings.map(([name, , value]) => `${name}Binding.bind(${value})`).join(',\n')}
+],close};
 ${local ? '' : '}catch(error){await close();throw error;}'}
 }
 `;

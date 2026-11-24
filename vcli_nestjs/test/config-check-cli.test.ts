@@ -1,41 +1,47 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { linkGeneratedDependencies } from './generated-dependencies.ts';
 
-// Evidence: installed bin/vcli.mjs against the notes project's startup schema.
-// This is not hosted-provider acceptance.
+// Exercise the installed entrypoint against the generated startup schema.
 const executable = fileURLToPath(new URL('../bin/vcli.mjs', import.meta.url));
 const probe = fileURLToPath(
   new URL('../bin/config-schema-probe.mjs', import.meta.url),
 );
 const workspace = fileURLToPath(new URL('..', import.meta.url));
-const project = join(workspace, 'examples/test_notes_mongo');
 const databaseUrl =
   'mongodb://127.0.0.1:27017/app?replicaSet=rs0&directConnection=true';
 
 function run(
   args: string[],
   env: NodeJS.ProcessEnv,
+  cwd = workspace,
 ): { status: number | null; stdout: string } {
-  const child = spawnSync(executable, args, {
-    cwd: workspace,
+  const child = spawnSync(process.execPath, [executable, ...args], {
+    cwd,
     encoding: 'utf8',
     env,
   });
+  assert.ifError(child.error);
   return { status: child.status, stdout: child.stdout };
 }
 
 test('installed config check accepts startup-valid local auth and names malformed fields', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'vcli-config-check-'));
+  const directory = await mkdtemp(
+    join(await realpath(tmpdir()), 'vcli-config-check-'),
+  );
+  const projectName = 'config-check-api';
+  const project = join(directory, projectName);
   const key = randomBytes(32).toString('base64url');
   const env = { ...process.env };
   for (const name of [
     'DATABASE_URL',
+    'REDIS_URL',
     'JWT_KEYS_JSON',
     'JWT_ACTIVE_KID',
     'APP_ENV_FILE',
@@ -44,6 +50,7 @@ test('installed config check accepts startup-valid local auth and names malforme
     delete env[name];
   const validBody = [
     `DATABASE_URL=${databaseUrl}`,
+    'REDIS_URL=redis://127.0.0.1:6379',
     'JWT_ACTIVE_KID=current',
     `JWT_KEYS_JSON='${JSON.stringify([{ id: 'current', key }])}'`,
     '',
@@ -65,6 +72,32 @@ test('installed config check accepts startup-valid local auth and names malforme
   await chmod(badKey, 0o600);
   const hidden = [key, databaseUrl, 'http://127.0.0.1:27017/app', 'not-a-key'];
   try {
+    const setup = run(
+      [
+        '--json',
+        'init',
+        projectName,
+        '--yes',
+        '--database',
+        'mongodb',
+        '--auth',
+        'local',
+        '--local-identifier',
+        'username',
+        '--skip-install',
+      ],
+      env,
+      directory,
+    );
+    assert.equal(setup.status, 0, setup.stdout);
+    await linkGeneratedDependencies(project);
+    const generated = run(
+      ['--json', 'config', 'check', '--config-file', '.env.development'],
+      env,
+      project,
+    );
+    assert.equal(generated.status, 0, generated.stdout);
+    assert.equal(JSON.parse(generated.stdout).data.status, 'valid');
     const dry = run(
       [
         '--json',
@@ -78,7 +111,7 @@ test('installed config check accepts startup-valid local auth and names malforme
       ],
       env,
     );
-    assert.equal(dry.status, 0);
+    assert.equal(dry.status, 0, dry.stdout);
     const preview = JSON.parse(dry.stdout) as {
       data: { status: string; schema: string };
     };

@@ -3,24 +3,24 @@ import assert from 'node:assert/strict';
 import {
   cp,
   mkdir,
-  rm,
+  mkdtemp,
   symlink,
   writeFile,
-  readdir,
   readFile,
 } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 import type { ProjectConfig } from '../src/contracts.ts';
+import { linkGeneratedDependencies } from './generated-dependencies.ts';
 export const fixtureRoot = resolve('var/cli-realtime');
 export async function realtimeFixture(
   database: 'mongodb' | 'postgres',
   directory = fixtureRoot,
 ) {
-  const root = directory + '/' + database;
-  await rm(`${root}/src`, { recursive: true, force: true });
+  await mkdir(directory, { recursive: true });
+  const root = await mkdtemp(join(directory, `${database}-`));
   await mkdir(`${root}/src`, { recursive: true });
   await cp(
     'templates/runtime/common/src/modules/realtime',
@@ -34,6 +34,7 @@ export async function realtimeFixture(
   );
   for (const sub of [
     'auth',
+    'bootstrap',
     'errors',
     'http',
     'realtime',
@@ -44,6 +45,7 @@ export async function realtimeFixture(
   }
   for (const [sub, files] of Object.entries({
     auth: ['principal.ts', 'principal-authority.ts'],
+    bootstrap: ['bootstrap-bindings.ts'],
     errors: ['application-error.ts'],
     http: [
       'principal.guard.ts',
@@ -75,36 +77,7 @@ export async function realtimeFixture(
     `export type AppConfig={database:{url:string};allowedOrigins:string[];auth:{driver:'local'|'firebase'};realtime:{driver:'socketio'|'ws'|'centrifugo';scale:'single-instance'|'cluster';path:string;maxPayloadBytes:number;ticketTtlSeconds:number;centrifugoApiUrl:string;centrifugoApiKey:string;centrifugoProxySecret:string}};\n`,
   );
   await writeFile(`${root}/package.json`, '{"type":"module"}\n');
-  await mkdir(`${root}/node_modules`, { recursive: true });
-  // Reuse installed SDKs without writing to their caches or downloading packages.
-  for (const base of [
-    `examples/reference-api${database === 'postgres' ? '-postgres' : ''}/node_modules`,
-    'node_modules',
-  ]) {
-    for (const entry of await readdir(base, { withFileTypes: true })) {
-      if (entry.name.startsWith('.')) continue;
-      const target = resolve(base, entry.name),
-        link = `${root}/node_modules/${entry.name}`;
-      try {
-        await symlink(target, link, 'dir');
-      } catch (error) {
-        if (!(
-          error &&
-          typeof error === 'object' &&
-          'code' in error &&
-          error.code === 'EEXIST'
-        ))
-          throw error;
-      }
-    }
-  }
-  // The root owns adapter setup; the reference @socket.io scope contains no cluster adapters.
-  await rm(`${root}/node_modules/@socket.io`, { force: true });
-  await symlink(
-    resolve('node_modules/@socket.io'),
-    `${root}/node_modules/@socket.io`,
-    'dir',
-  );
+  await linkGeneratedDependencies(root);
   await writeFile(
     `${root}/tsconfig.json`,
     JSON.stringify({

@@ -18,6 +18,18 @@ export class InstallationService extends BaseRepository<Installation> {
     );
   }
 
+  listOwnedByIds(
+    accountId: string,
+    ids: readonly string[],
+    context: TransactionContext,
+  ): Promise<Installation[]> {
+    if (!ids.length) return Promise.resolve([]);
+    return this.findMany(
+      { accountId, _id: { $in: [...ids] } },
+      { context, limit: ids.length },
+    );
+  }
+
   async enroll(
     id: string,
     accountId: string,

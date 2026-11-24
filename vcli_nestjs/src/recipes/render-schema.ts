@@ -6,40 +6,45 @@ import {
   type RenderedFile,
 } from '../contracts.js';
 import { file } from './bundle.js';
-import { selection } from './selection.js';
+import { selectIdentityTemplate } from './identity-template.js';
+import { basicLocalAuth, selection } from './selection.js';
+
+function schemaTemplate(path: string): Buffer {
+  const locate = (name: string) =>
+    new URL('../../templates/runtime/' + name, import.meta.url);
+  try {
+    return readFileSync(locate(path));
+  } catch (error) {
+    // Match runtime()'s curated variant/common fallback; location-only dedup preserves the digest.
+    if (
+      !error ||
+      typeof error !== 'object' ||
+      !('code' in error) ||
+      error.code !== 'ENOENT' ||
+      !/^(mongodb|postgres)\/src\//.test(path)
+    )
+      throw error;
+    return readFileSync(
+      locate(path.replace(/^(mongodb|postgres)\//, 'common/')),
+    );
+  }
+}
 
 /** Only explicit bundled technical migrations are hashed, never private env or keys. */
-function contributionDigest(paths: readonly string[]): string {
+function contributionDigest(
+  paths: readonly string[],
+  identityConfig?: ProjectConfig,
+): string {
   const hash = createHash('sha256');
   for (const path of [...paths].sort()) {
-    hash.update(path + '\0');
-    try {
-      hash.update(
-        readFileSync(
-          new URL('../../templates/runtime/' + path, import.meta.url),
-        ),
-      );
-    } catch (error) {
-      // Match runtime()'s curated variant/common fallback; location-only dedup preserves the digest.
-      if (
-        !error ||
-        typeof error !== 'object' ||
-        !('code' in error) ||
-        error.code !== 'ENOENT' ||
-        !/^(mongodb|postgres)\/src\//.test(path)
-      )
-        throw error;
-      hash.update(
-        readFileSync(
-          new URL(
-            '../../templates/runtime/' +
-              path.replace(/^(mongodb|postgres)\//, 'common/'),
-            import.meta.url,
-          ),
-        ),
-      );
-    }
-    hash.update('\0');
+    const source = schemaTemplate(path);
+    const selected = identityConfig
+      ? selectIdentityTemplate(source.toString('utf8'), path, identityConfig)
+      : source;
+    hash
+      .update(path + '\0')
+      .update(selected)
+      .update('\0');
   }
   return hash.digest('hex');
 }
@@ -52,7 +57,8 @@ export function schemaFiles(config: ProjectConfig): RenderedFile[] {
   const native = variant === 'mongodb' ? 'MongoDatabase' : 'PostgresDatabase';
   const nativeFile =
     variant === 'mongodb' ? 'mongo-database' : 'postgres-database';
-  const auth = Boolean(selection(config, 'auth'));
+  const auth = selection(config, 'auth');
+  const basicAuth = basicLocalAuth(config);
   const mail = config.capabilities.mail?.options.reliableActions === true;
   const notes = selection(config, 'notes') === 'example.notes';
   const media = Boolean(selection(config, 'media'));
@@ -80,9 +86,30 @@ export function schemaFiles(config: ProjectConfig): RenderedFile[] {
   const components: { component: string; version: number; digest: string }[] =
     [];
   const add = (component: string, version: number, paths: readonly string[]) =>
-    components.push({ component, version, digest: contributionDigest(paths) });
-  if (auth)
-    add('identity', 2, [
+    components.push({
+      component,
+      version,
+      digest: contributionDigest(
+        paths,
+        component === 'identity' ? config : undefined,
+      ),
+    });
+  if (basicAuth && variant === 'mongodb') {
+    // The Mongoose implementation retains the original v1 collection validator
+    // and index. A storage contract change needs a new component version.
+    components.push({
+      component: 'identity.basic',
+      version: 1,
+      digest:
+        '962c63d512052282a2d0eee8c99a85430e133bb5dd66adb4c2642a1adb7ad9d5',
+    });
+  } else if (basicAuth)
+    add('identity.basic', 1, [
+      `${variant}/src/modules/auth/auth.entity.ts`,
+      `${variant}/src/modules/auth/initialize-auth.ts`,
+    ]);
+  else if (auth)
+    add('identity', 4, [
       `${variant}/src/initialize-identity-database.ts`,
       ...(variant === 'postgres'
         ? [
@@ -92,7 +119,9 @@ export function schemaFiles(config: ProjectConfig): RenderedFile[] {
         : [
             'accounts/account.entity.ts',
             'identity/identity.entity.ts',
-            'identity/provider-cleanup.entity.ts',
+            ...(auth === 'auth.firebase'
+              ? ['identity/provider-cleanup.entity.ts']
+              : []),
             'installations/installation.entity.ts',
             'sessions/session.entity.ts',
             'identity/identity-lifecycle-migration.ts',
@@ -124,6 +153,10 @@ export function schemaFiles(config: ProjectConfig): RenderedFile[] {
       `${variant}/src/modules/notes/initialize-notes.ts`,
       `${variant}/src/modules/notes/notes.entity.ts`,
     ]);
+  if (notes && media)
+    add('notes.image', 1, [
+      `${variant}/src/modules/notes/initialize-notes-image.ts`,
+    ]);
   if (realtime)
     add(realtimeComponent!, 1, [
       `${variant}/src/modules/realtime/initialize-realtime.ts`,
@@ -145,11 +178,13 @@ export function schemaFiles(config: ProjectConfig): RenderedFile[] {
     "import {customMigrations} from '../release/custom-migrations.js';",
     "import {openDatabase} from '../core/database/database.js';",
     "import {selectedReleaseManifest} from './selected-release.js';",
-    ...(auth
-      ? [
-          "import {initializeIdentityDatabase} from '../initialize-identity-database.js';",
-        ]
-      : []),
+    ...(basicAuth
+      ? ["import {initializeAuth} from '../modules/auth/initialize-auth.js';"]
+      : auth
+        ? [
+            "import {initializeIdentityDatabase} from '../initialize-identity-database.js';",
+          ]
+        : []),
     ...(mail
       ? ["import {initializeMail} from '../modules/mail/initialize-mail.js';"]
       : []),
@@ -164,6 +199,11 @@ export function schemaFiles(config: ProjectConfig): RenderedFile[] {
     ...(notes
       ? [
           "import {initializeNotes} from '../modules/notes/initialize-notes.js';",
+        ]
+      : []),
+    ...(notes && media
+      ? [
+          "import {initializeNotesImage} from '../modules/notes/initialize-notes-image.js';",
         ]
       : []),
     ...(realtime
@@ -215,11 +255,18 @@ export async function assertSelectedReleaseReady(database:${native},manifest:Rel
 export async function initializeSelectedSchemas(config:AppConfig):Promise<readonly string[]> {
 const store=await NativeReleaseStore.connect(config.database.url);
 try{return await new ReleaseCoordinator(store).apply(selectedReleaseManifest,[
-${auth ? "{component:'identity',apply:()=>initializeIdentityDatabase(config)}," : ''}
+${
+  basicAuth
+    ? "{component:'identity.basic',apply:async()=>{const database=await openDatabase(config,false);try{await initializeAuth(database);}finally{await database.close();}}},"
+    : auth
+      ? "{component:'identity',apply:()=>initializeIdentityDatabase(config)},"
+      : ''
+}
 ${mail ? "{component:'mail',apply:async()=>{const database=await openDatabase(config,false);try{await initializeMail(database);}finally{await database.close();}}}," : ''}
 ${media ? "{component:'media',apply:()=>initializeMediaSchema(config)}," : ''}
 ${push ? "{component:'push',apply:()=>initializePushSchema(config)}," : ''}
 ${notes ? "{component:'notes',apply:async()=>{const database=await openDatabase(config,false);try{await initializeNotes(database);}finally{await database.close();}}}," : ''}
+${notes && media ? "{component:'notes.image',apply:async()=>{const database=await openDatabase(config,false);try{await initializeNotesImage(database);}finally{await database.close();}}}," : ''}
 ${realtime ? `{component:'${realtimeComponent}',apply:async()=>{const database=await openDatabase(config,false);try{await initializeRealtime(database);}finally{await database.close();}}},` : ''}
 ...customMigrations.map(({component,apply})=>({component,apply:async()=>{
   const database=await openDatabase(config,false);

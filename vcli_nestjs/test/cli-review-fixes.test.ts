@@ -1,9 +1,18 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 import {
   BoundedFailure,
@@ -22,6 +31,7 @@ import {
   removeBetween,
 } from '../dist/recipes/template-markers.js';
 import { parseCheckDiagnostics } from '../dist/script-result.js';
+import type { ProjectLock } from '../src/engine/types.js';
 
 const executable = fileURLToPath(new URL('../bin/vcli.mjs', import.meta.url));
 const workspaceRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -204,6 +214,83 @@ test('default and verbose text output render catalog, explain, doctor, logs and 
   });
   assert.ok(logLines.some((line) => line.includes('retained: 2 files')));
   assert.ok(logLines.some((line) => line.includes('NOTE_NOT_FOUND')));
+});
+
+test('explain uses recorded ownership and reports unknown provenance without a matching lock entry', async (t) => {
+  const dir = await mkdtemp(join(await realpath(tmpdir()), 'vcli-explain-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const project = join(dir, 'app');
+  const init = spawnSync(
+    process.execPath,
+    [executable, 'init', 'app', '--yes', '--skip-install', '--json'],
+    { cwd: dir, encoding: 'utf8' },
+  );
+  assert.equal(init.status, 0, init.stdout + init.stderr);
+
+  const relative = 'src/app.custom.module.ts';
+  const explain = () => {
+    const result = spawnSync(
+      process.execPath,
+      [executable, '--project', project, 'explain', relative, '--json'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    return (JSON.parse(result.stdout) as { data: Record<string, unknown> })
+      .data;
+  };
+  const current = explain();
+  assert.equal(current.owner, 'scaffold');
+  assert.equal(current.provenance, 'project-lock');
+
+  const lockFile = join(project, 'vcli.lock.json');
+  const lock = JSON.parse(await readFile(lockFile, 'utf8')) as ProjectLock;
+  delete lock.files[relative]!.provenance;
+  await writeFile(lockFile, JSON.stringify(lock));
+  const legacy = explain();
+  assert.equal(legacy.owner, 'scaffold');
+  assert.equal(legacy.provenance, 'unknown');
+  assert.equal(legacy.evidence, 'project-lock');
+
+  delete lock.files[relative];
+  await writeFile(lockFile, JSON.stringify(lock));
+  const unrecorded = explain();
+  assert.equal(unrecorded.owner, 'unknown');
+  assert.equal(unrecorded.provenance, 'unknown');
+  assert.equal(unrecorded.evidence, 'unknown');
+});
+
+test('local distribution excludes Finder metadata omitted by npm packing', async (t) => {
+  const dir = await mkdtemp(join(await realpath(tmpdir()), 'vcli-vendor-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dist = join(dir, 'dist', 'distribution.mjs');
+  for (const path of ['bin', 'dist', 'templates/runtime', 'runtime-packages'])
+    await mkdir(join(dir, path), { recursive: true });
+  await copyFile(join(workspaceRoot, 'dist/distribution.js'), dist);
+  await writeFile(join(dir, 'package.json'), '{"name":"@vcli/cli"}');
+  await writeFile(join(dir, 'templates/runtime/.DS_Store'), 'finder metadata');
+  await writeFile(join(dir, 'templates/runtime/example.ts'), 'export {};');
+  const { withLocalDistribution } = (await import(
+    pathToFileURL(dist).href
+  )) as typeof import('../src/distribution.js');
+  const catalog = withLocalDistribution({
+    recipes: [],
+    render: async () => ({
+      files: [{ path: 'package.json', content: '{}', ownership: 'managed' }],
+      checks: [],
+      pending: [],
+      warnings: [],
+    }),
+  });
+  const { files } = await catalog.render(
+    {
+      schemaVersion: 1,
+      project: { name: 'vendor-proof', packageManager: 'npm' },
+      capabilities: {},
+    },
+    [],
+  );
+  assert.ok(files.some(({ path }) => path.endsWith('/runtime/example.ts')));
+  assert.ok(files.every(({ path }) => !path.endsWith('/.DS_Store')));
 });
 
 test('vector config without database allows no database events and logs status reports missing diagnostics', async () => {

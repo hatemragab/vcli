@@ -21,7 +21,7 @@ export async function initializeRealtime(
       sql`CREATE INDEX IF NOT EXISTS vcli_realtime_account ON vcli_realtime_records(kind,account_id)`,
     );
     await tx.execute(
-      sql`INSERT INTO ref_migrations(name) VALUES ('realtime-v1') ON CONFLICT DO NOTHING`,
+      sql`INSERT INTO migrations(name) VALUES ('realtime-v1') ON CONFLICT DO NOTHING`,
     );
   });
   // Selected adapter schema contribution.

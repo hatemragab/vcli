@@ -8,6 +8,7 @@ export const SUPPORTED_TOOL_VERSIONS = [
   TOOL_VERSION,
 ] as const;
 export const NODE_ENGINE_RANGE = '>=26.13.1 <27';
+export const LOCAL_DEVELOPMENT_STORAGE_ROOT = 'storage';
 export const CONFIG_ERROR_CODES = [
   'INVALID_CONFIG',
   'INVALID_JWT_POLICY',
@@ -60,6 +61,8 @@ export interface RenderedFile {
   path: string;
   content: string;
   ownership: FileOwnership;
+  /** Optional scaffolds can coexist with user files that predate generation. */
+  preserveExisting?: true;
   provenance?: FileProvenance;
 }
 export interface CheckCommand {
@@ -69,6 +72,8 @@ export interface CheckCommand {
 }
 export interface RenderedProject {
   files: RenderedFile[];
+  /** Public local defaults. Development keys are minted only when init applies. */
+  developmentDefaults?: Record<string, string>;
   checks: CheckCommand[];
   warnings: string[];
   pending: string[];

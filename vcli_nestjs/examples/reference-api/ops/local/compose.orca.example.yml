@@ -1,5 +1,0 @@
-# Contributor-local override only; copy outside tracked artifacts for this VPS.
-services:
-  mongodb: { cgroup_parent: orca.slice }
-  centrifugo: { cgroup_parent: orca.slice }
-  vector: { cgroup_parent: orca.slice }

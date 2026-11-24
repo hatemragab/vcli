@@ -40,6 +40,17 @@ export class SessionIssuer {
       facts.allowRebind,
       ctx,
     );
+    if (
+      kind === 'firebase' &&
+      (await this.sessions.hasInstallationRevocation(
+        accountId,
+        installation.id,
+        installation.generation,
+        authenticatedAt,
+        ctx,
+      ))
+    )
+      throw new ApplicationError('REAUTHENTICATION_REQUIRED', 401);
     await this.sessions.revokeInstallation(
       installation.id,
       installation.generation,

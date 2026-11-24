@@ -15,7 +15,7 @@ export class RealtimeStoreService implements RealtimeStore {
   constructor(private readonly database: PostgresDatabase) {}
   async assertInitialized(): Promise<void> {
     const result = await this.database.db.execute(
-      sql`SELECT name FROM ref_migrations WHERE name='realtime-v1'`,
+      sql`SELECT name FROM migrations WHERE name='realtime-v1'`,
     );
     if (result.rowCount !== 1)
       throw new ApplicationError('REALTIME_INITIALIZATION_REQUIRED', 503);

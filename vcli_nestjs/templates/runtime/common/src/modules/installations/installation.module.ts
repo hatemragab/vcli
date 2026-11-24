@@ -1,12 +1,12 @@
-import { Module, type DynamicModule } from '@nestjs/common';
+import { Module } from '@nestjs/common';
+import { bootstrapBinding } from '../../core/bootstrap/bootstrap-bindings.js';
 import { InstallationService } from './installation.service.js';
-@Module({})
-export class InstallationModule {
-  static register(service: InstallationService): DynamicModule {
-    return {
-      module: InstallationModule,
-      providers: [{ provide: InstallationService, useValue: service }],
-      exports: [InstallationService],
-    };
-  }
-}
+
+const installationServiceBinding = bootstrapBinding(InstallationService);
+export const bindInstallationService = installationServiceBinding.bind;
+
+@Module({
+  providers: [installationServiceBinding.provider],
+  exports: [InstallationService],
+})
+export class InstallationModule {}

@@ -16,6 +16,27 @@ import type {
 } from './service-types.js';
 import { runOwnedProcess } from './owned-process.js';
 
+const composeActions = {
+  up: ['up', '--detach', '--wait', '--wait-timeout', '60', 'database'],
+  down: ['down', '--timeout', '30'],
+  status: ['ps', '--all', '--format', 'json'],
+} as const;
+
+function composePrefix(
+  options: ServiceExecutionOptions,
+  composeProject: string,
+): string[] {
+  return [
+    'compose',
+    '--project-name',
+    composeProject,
+    '--project-directory',
+    path.resolve(options.root),
+    '-f',
+    `ops/local/${options.plan.environment}/compose.yaml`,
+  ];
+}
+
 function port(value: number): number {
   if (!Number.isInteger(value) || value < 1024 || value > 65535)
     throw new Error('INVALID_SERVICE_PORT');
@@ -28,7 +49,7 @@ export function planServiceCommand(
 ): ServiceCommandPlan {
   const { plan } = options;
   if (
-    !['up', 'down', 'status'].includes(action) ||
+    !Object.keys(composeActions).includes(action) ||
     plan.target !== 'local' ||
     !['development', 'test'].includes(plan.environment)
   )
@@ -38,21 +59,7 @@ export function planServiceCommand(
   );
   if (options.databasePort !== undefined) port(options.databasePort);
   const composeProject = serviceResourceName(plan.project, plan.environment);
-  const prefix = [
-    'compose',
-    '--project-name',
-    composeProject,
-    '--project-directory',
-    path.resolve(options.root),
-    '-f',
-    `ops/local/${plan.environment}/compose.yaml`,
-  ];
-  const commandArgs =
-    action === 'up'
-      ? ['up', '--detach', '--wait', '--wait-timeout', '60', 'database']
-      : action === 'down'
-        ? ['down', '--timeout', '30']
-        : ['ps', '--all', '--format', 'json'];
+  const prefix = composePrefix(options, composeProject);
   const mongo = database?.image?.startsWith('mongo:');
   return {
     schemaVersion: 1,
@@ -61,7 +68,7 @@ export function planServiceCommand(
     environment: plan.environment,
     composeProject,
     command: 'docker',
-    args: [...prefix, ...commandArgs],
+    args: [...prefix, ...composeActions[action]],
     ...(action === 'up' && mongo
       ? {
           setupArgs: [...prefix, 'run', '--rm', '--no-deps', 'database-init'],
@@ -112,13 +119,12 @@ function labelMap(raw: unknown): Record<string, unknown> {
       : {};
 }
 
-/** Every discovered container must belong to this exact project directory and selected service. */
-export function assertServiceOwnership(
+function ownedServiceRows(
   stdout: string,
   options: ServiceExecutionOptions,
   composeProject: string,
-): void {
-  for (const row of outputRows(stdout)) {
+): Record<string, unknown>[] {
+  return outputRows(stdout).map((row) => {
     if (!row || typeof row !== 'object' || !('Labels' in row))
       throw new Error('SERVICE_OWNERSHIP_CONFLICT');
     const labels = labelMap(row.Labels);
@@ -133,7 +139,17 @@ export function assertServiceOwnership(
       )
     )
       throw new Error('SERVICE_OWNERSHIP_CONFLICT');
-  }
+    return row;
+  });
+}
+
+/** Every discovered container must belong to this exact project directory and selected service. */
+export function assertServiceOwnership(
+  stdout: string,
+  options: ServiceExecutionOptions,
+  composeProject: string,
+): void {
+  ownedServiceRows(stdout, options, composeProject);
 }
 
 /** Read-only ownership preflight, then a bounded native Compose invocation; no installs or resets. */
@@ -146,6 +162,13 @@ export async function executeServiceCommand(
   const planned = planServiceCommand(action, options);
   if (options.dryRun) return { plan: planned, status: 'planned' };
   if (planned.noServices) return { plan: planned, status: 'no-services' };
+  const statusArgs =
+    action === 'status'
+      ? planned.args
+      : [
+          ...composePrefix(options, planned.composeProject),
+          ...composeActions.status,
+        ];
   const root = await realpath(options.root);
   const verifyArtifacts = async () => {
     // Detect stale/tampered selected metadata without exposing any private content.
@@ -208,24 +231,20 @@ export async function executeServiceCommand(
       : {}),
   };
   const invoke = (args: readonly string[]) =>
-    runner({ command: 'docker', args, cwd: root, environment });
-  const prefix = planned.args.slice(0, planned.args.indexOf('-f') + 2);
+    runner({ command: planned.command, args, cwd: root, environment });
   const execute = async (): Promise<ServiceExecutionResult> => {
-    const existing = await invoke([
-      ...prefix,
-      'ps',
-      '--all',
-      '--format',
-      'json',
-    ]);
+    const existing = await invoke(statusArgs);
     if (existing.code !== 0) throw new Error('SERVICE_INSPECTION_FAILED');
-    assertServiceOwnership(existing.stdout, options, planned.composeProject);
+    const rows = ownedServiceRows(
+      existing.stdout,
+      options,
+      planned.composeProject,
+    );
     if (action === 'status')
       return {
         plan: planned,
         status: 'completed',
-        services: outputRows(existing.stdout).map((row) => {
-          const item = row as Record<string, unknown>;
+        services: rows.map((item) => {
           const service = String(item.Service),
             state = String(item.State);
           if (

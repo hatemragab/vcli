@@ -156,6 +156,7 @@ test('deployment plan requires actual selected resource bindings and explicit pr
       environment: 'production',
       targetVersion: '0.31.3',
       externalResources: {
+        'auth-redis': 'actual-auth-redis-1',
         database: 'actual-db-1',
         firebase: 'actual-firebase-1',
       },
@@ -176,6 +177,7 @@ test('deployment plan requires actual selected resource bindings and explicit pr
       PORT: '3100',
       PUBLIC_ORIGIN: 'https://api.example.invalid',
       ALLOWED_ORIGINS: 'https://api.example.invalid',
+      REDIS_URL: `rediss://app:${secret}@redis.example.invalid:6379`,
     });
     const profileFile = join(directory, 'profile.json');
     await writeFile(
@@ -225,6 +227,7 @@ test('deployment plan requires actual selected resource bindings and explicit pr
           secretRevisionRef: 'fixture:revision',
           ingressRef: 'fixture:private-ingress',
           externalResources: {
+            'actual-auth-redis-1': 'fixture:auth-redis-proof',
             'actual-db-1': 'fixture:db-proof',
             'actual-firebase-1': 'fixture:firebase-proof',
           },
@@ -253,12 +256,22 @@ test('deployment plan requires actual selected resource bindings and explicit pr
       1,
       'missing real resource bindings deny before save',
     );
-    const bound = [
+    const providerBindings = [
       ...args,
       '--resource',
       'database=actual-db-1',
       '--resource',
       'firebase=actual-firebase-1',
+    ];
+    assert.equal(
+      invoke(directory, [...providerBindings, '--dry-run']).code,
+      1,
+      'auth Redis requires a distinct resource binding',
+    );
+    const bound = [
+      ...providerBindings,
+      '--resource',
+      'auth-redis=actual-auth-redis-1',
     ];
     const preview = invoke(directory, [...bound, '--dry-run']);
     assert.equal(preview.code, 0, JSON.stringify(preview.result));

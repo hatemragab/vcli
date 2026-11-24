@@ -5,6 +5,7 @@ import { cp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { ProjectConfig, RenderedFile } from '../src/contracts.js';
+import { linkGeneratedDependencies } from './generated-dependencies.ts';
 import { pushFixture, pushFixtureRoot } from './push-lifecycle-fixture.ts';
 
 test('six selected push closures: real renderer, strict ES2023 noEmit, lint and architecture with cached dependencies', async () => {
@@ -77,6 +78,16 @@ test('six selected push closures: real renderer, strict ES2023 noEmit, lint and 
         },
       };
       const files = await pushFiles(config);
+      const readme = files.find(
+        (file) => file.path === 'ops/push/README.md',
+      )!.content;
+      const fcm = selected.includes('push.fcm');
+      const apns = selected.includes('push.apns');
+      assert.ok(
+        readme.includes(`Ordinary push routes to ${fcm ? 'FCM' : 'APNs'}.`),
+      );
+      assert.equal(readme.includes('Firebase Admin SDK'), fcm);
+      assert.equal(readme.includes('TrustedCallInvitationPolicy'), apns);
       const root = `${pushFixtureRoot}/selected-${database}-${selected.join('-')}`;
       await rm(`${root}/src`, { recursive: true, force: true });
       await mkdir(root, { recursive: true });
@@ -88,17 +99,7 @@ test('six selected push closures: real renderer, strict ES2023 noEmit, lint and 
         `${root}/tsconfig.json`,
       );
       await writeFile(`${root}/package.json`, '{"type":"module"}\n');
-      try {
-        await symlink(
-          resolve(
-            `examples/reference-api${database === 'postgres' ? '-postgres' : ''}/node_modules`,
-          ),
-          `${root}/node_modules`,
-          'dir',
-        );
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      }
+      await linkGeneratedDependencies(root);
       for (const file of [
         ...files,
         ...configuration(config).files.filter((f) => f.path.startsWith('src/')),

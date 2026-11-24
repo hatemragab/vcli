@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { recipeCatalog } from '../dist/recipes/index.js';
+import { linkGeneratedDependencies } from './generated-dependencies.ts';
 
 for (const database of ['postgres', 'mongodb'] as const) {
   const url =
@@ -40,12 +41,7 @@ for (const database of ['postgres', 'mongodb'] as const) {
           await mkdir(dirname(join(root, file.path)), { recursive: true });
           await writeFile(join(root, file.path), file.content);
         }
-        const modules = resolve(
-          'examples',
-          database === 'postgres' ? 'reference-api-postgres' : 'reference-api',
-          'node_modules',
-        );
-        await symlink(modules, join(root, 'node_modules'), 'dir');
+        await linkGeneratedDependencies(root);
         const run = (args: string[]) => {
           const result = spawnSync(process.execPath, args, {
             cwd: root,

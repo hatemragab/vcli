@@ -25,6 +25,10 @@ import { SessionManagement } from './session-management.service.js';
 type RequestSchema = Extract<ApiBodyOptions, { schema: unknown }>['schema'];
 const revokeInput = z.discriminatedUnion('scope', [
   z.strictObject({ scope: z.literal('selected'), sessionId: z.uuid() }),
+  z.strictObject({
+    scope: z.literal('installation'),
+    installationId: z.uuid(),
+  }),
   z.strictObject({ scope: z.enum(['current', 'others', 'all']) }),
 ]);
 @Controller('sessions')
@@ -43,11 +47,20 @@ export class SessionsController {
       limit: 100,
     };
   }
+  @Get('devices')
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({ summary: 'List owned installations with active sessions' })
+  async devices(@CurrentPrincipal() actor: Principal) {
+    return {
+      devices: await this.sessions.listDevices(actor, Date.now()),
+      limit: 100,
+    };
+  }
   @Post('revoke')
   @ApiOperation({
-    summary: 'Revoke current, selected, other or all owned sessions',
+    summary: 'Revoke owned sessions, optionally for one installation',
     description:
-      'Ownership comes from the verified principal. Non-current scopes require recent authentication. Foreign and missing selected session IDs return the same response.',
+      'Ownership comes from the verified principal. Non-current scopes require recent authentication. Foreign and missing targets receive the same response.',
   })
   @ApiHeader({
     name: 'X-Session-Token',
@@ -59,7 +72,7 @@ export class SessionsController {
   @ApiBody({
     required: true,
     description:
-      'Choose a scope. Only selected accepts a sessionId; replace its non-issued example UUID with an active session owned by the caller.',
+      'Use sessionId with selected, or installationId with installation to sign out all active sessions on one owned device.',
     // Zod emits the selected OpenAPI 3.0 target; its declaration also permits other JSON Schema drafts.
     schema: z.toJSONSchema(revokeInput, {
       target: 'openapi-3.0',
@@ -72,6 +85,13 @@ export class SessionsController {
         value: {
           scope: 'selected',
           sessionId: '00000000-0000-4000-8000-000000000000',
+        },
+      },
+      installation: {
+        summary: 'Revoke active sessions on one owned device',
+        value: {
+          scope: 'installation',
+          installationId: '00000000-0000-4000-8000-000000000000',
         },
       },
       others: {
@@ -91,7 +111,11 @@ export class SessionsController {
     await this.sessions.revoke(
       actor,
       input.scope,
-      input.scope === 'selected' ? input.sessionId : undefined,
+      input.scope === 'selected'
+        ? input.sessionId
+        : input.scope === 'installation'
+          ? input.installationId
+          : undefined,
       Date.now(),
     );
     return { status: 'revoked' };

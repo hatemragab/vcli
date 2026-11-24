@@ -1,26 +1,7 @@
 import { pgTable, text, uuid, integer, bigint } from 'drizzle-orm/pg-core';
-export type ProviderCleanup = Readonly<{
-  id: string;
-  identityKey: string;
-  generation: number;
-  action: 'revoke' | 'delete' | 'unlink';
-  method: string | null;
-  status:
-    'pending' | 'leased' | 'retry' | 'unknown' | 'completed' | 'exhausted';
-  attempts: number;
-  nextAttemptAt: number;
-  leaseId: string | null;
-  leaseUntil: number;
-  lastCode:
-    | 'NONE'
-    | 'PROVIDER_RETRY'
-    | 'PROVIDER_UNKNOWN'
-    | 'PROVIDER_REJECTED'
-    | 'STALE_BINDING';
-  createdAt: number;
-  completedAt: number | null;
-}>;
-export const providerCleanupTable = pgTable('ref_provider_cleanup', {
+import type { ProviderCleanup } from './credential-ports.js';
+export type { ProviderCleanup } from './credential-ports.js';
+export const providerCleanupTable = pgTable('provider_cleanup', {
   id: uuid('id').primaryKey(),
   identityKey: text('identity_key').notNull(),
   generation: integer('generation').notNull(),

@@ -22,12 +22,13 @@ import { file, runtime } from './bundle.js';
 import { checkFiles } from './render-checks.js';
 import { configuration } from './render-config.js';
 import { foundationFiles } from './render-foundation.js';
+import { basicAuthFiles } from './render-basic-auth.js';
 import { identityFiles } from './render-identity.js';
 import { identityJobFiles } from './render-identity-job.js';
 import { firebaseMailFiles } from './render-mail.js';
 import { schemaFiles } from './render-schema.js';
 import { renderReleaseFiles } from './render-release.js';
-import { httpDocsFile } from './render-http-docs.js';
+import { httpDocsFiles } from './render-http-docs.js';
 import {
   mailFiles,
   mediaFiles,
@@ -36,6 +37,8 @@ import {
 } from './render-capabilities.js';
 import { realtimeFiles } from './render-realtime.js';
 import { notesFiles } from './render-notes.js';
+import { seedFiles } from './render-seed.js';
+import { ideFiles } from './render-ide.js';
 import { diagnosticsFiles } from './render-diagnostics.js';
 import { deploymentFiles } from './render-deployment.js';
 import { serviceFiles } from './render-services.js';
@@ -43,7 +46,12 @@ import { packageFile } from './render-package.js';
 import { compositionFile } from './render-composition.js';
 import { selectedGuidance } from './selected-guidance.js';
 import { formatFiles } from './format-files.js';
-import { selection, usernameAuth, validateSelection } from './selection.js';
+import {
+  basicLocalAuth,
+  selection,
+  usernameAuth,
+  validateSelection,
+} from './selection.js';
 import { projectChecks } from './project-checks.js';
 
 export async function renderProject(
@@ -92,10 +100,13 @@ export async function renderProject(
       ...own(selection(canonical, 'database') ?? 'database', [
         file(
           'src/core/database/database.module.ts',
-          `import {Module,type DynamicModule} from '@nestjs/common';
+          `import {Module} from '@nestjs/common';
+import {bootstrapBinding} from '../bootstrap/bootstrap-bindings.js';
 import {${name}} from './${mongo ? 'mongo' : 'postgres'}-database.js';
-@Module({})
-export class DatabaseModule {static register(database:${name}):DynamicModule{return {module:DatabaseModule,providers:[{provide:${name},useValue:database}],exports:[${name}]};}}
+const database=bootstrapBinding<${name}>(${name});
+export const bindDatabase=database.bind;
+@Module({providers:[database.provider],exports:[${name}]})
+export class DatabaseModule {}
 `,
         ),
       ]),
@@ -125,13 +136,16 @@ export class DatabaseModule {static register(database:${name}):DynamicModule{ret
       );
   }
   if (selection(canonical, 'auth')) {
+    const basic = basicLocalAuth(canonical);
     files.push(
       ...own(selection(canonical, 'auth') ?? 'auth', [
-        ...(await identityFiles(canonical)),
-        httpDocsFile(canonical),
+        ...(await (basic
+          ? basicAuthFiles(canonical)
+          : identityFiles(canonical))),
+        ...(await httpDocsFiles(canonical)),
       ]),
     );
-    if (usernameAuth(canonical))
+    if (!basic && usernameAuth(canonical))
       warnings.push(
         'Username/password authentication has no email verification or forgotten-password recovery. No email ownership is claimed; authenticated current-password change is available.',
       );
@@ -141,7 +155,9 @@ export class DatabaseModule {static register(database:${name}):DynamicModule{ret
       );
     else
       pending.push(
-        'Supply private JWT_KEYS_JSON and JWT_ACTIVE_KID with independently generated keys. Retain overlap keys through token and backup lifetimes; clients singleflight refresh and reauthenticate after an ambiguous response.',
+        basic
+          ? 'For production, supply private JWT signing keys and a REDIS_URL reachable by the app.'
+          : 'Supply private JWT_KEYS_JSON and JWT_ACTIVE_KID with independently generated keys. Retain overlap keys through token and backup lifetimes; clients singleflight refresh and reauthenticate after an ambiguous response.',
       );
   }
   if (selection(canonical, 'auth') === 'auth.firebase')
@@ -209,7 +225,7 @@ export class DatabaseModule {static register(database:${name}):DynamicModule{ret
       ),
     );
     pending.push(
-      'Import the configured RealtimeModule explicitly in custom consumers, recover authoritative owner state after connection loss, and accept the selected protocol.',
+      'Import RealtimeModule in each custom consumer, recover authoritative owner state after connection loss, and accept the selected protocol.',
     );
     if (selection(canonical, 'realtime') === 'realtime.centrifugo')
       pending.push(
@@ -252,7 +268,9 @@ export class DatabaseModule {static register(database:${name}):DynamicModule{ret
   files.push(...own('services', serviceFiles(canonical, env.fields)));
   files.push(...own('release', await renderReleaseFiles(canonical)));
   files.push(...own('schema', schemaFiles(canonical)));
+  files.push(...own('seed', await seedFiles(canonical)));
   files.push(...own('checks', await checkFiles(canonical)));
+  files.push(...own('ide', ideFiles()));
   files.push(...own('composition', [compositionFile(canonical)]));
   files.push(...own('package', [packageFile(canonical, files)]));
   files.push(
@@ -269,6 +287,7 @@ export class DatabaseModule {static register(database:${name}):DynamicModule{ret
       [...unique.values()].sort((a, b) => a.path.localeCompare(b.path)),
     ),
     checks: projectChecks(),
+    developmentDefaults: env.developmentDefaults,
     warnings,
     pending,
   };

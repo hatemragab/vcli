@@ -15,6 +15,7 @@ import {
   validateToolchain,
 } from './data.js';
 import { EngineError } from './engine-error.js';
+import { developmentEnvFile } from './development-environment.js';
 import { recordedFile } from './plan-assembly.js';
 import {
   managedRegion,
@@ -24,7 +25,7 @@ import {
   validatePackageFields,
 } from './managed-content.js';
 import {
-  expectedFile,
+  fileExpectation,
   initEntries,
   projectPath,
   readRegular,
@@ -82,7 +83,7 @@ async function constructPlan(options: {
     recipes,
     changes: [],
     guards: [],
-    checks: validatedChecks(rendered.checks),
+    checks: rendered.checks,
     warnings: [...rendered.warnings],
     pending: [
       ...new Set([...(previous?.lock.pending ?? []), ...rendered.pending]),
@@ -92,6 +93,8 @@ async function constructPlan(options: {
       : { source: 'pending', install: 'pending', checks: 'pending' },
   };
   if (kind === 'init') plan.initialEntries = options.initialEntries ?? [];
+  if (kind === 'init' && rendered.developmentDefaults)
+    plan.developmentDefaults = { ...rendered.developmentDefaults };
   const lock: ProjectLock = previous
     ? structuredClone(previous.lock)
     : {
@@ -147,16 +150,24 @@ async function constructPlan(options: {
       expected: { kind: 'hash', hash: hash(packageBytes) },
     });
   }
-  async function change(file: RenderedFile, content: string): Promise<void> {
-    const full = await projectPath(projectDir, file.path);
-    const expected = await expectedFile(full);
-    if (expected.kind === 'hash' && expected.hash === hash(content)) return;
+  async function change(
+    file: Pick<RenderedFile, 'path' | 'ownership'>,
+    content: string,
+    before?: Buffer | null,
+  ): Promise<void> {
+    const original =
+      before === undefined
+        ? await readRegular(await projectPath(projectDir, file.path))
+        : before;
+    const expected = fileExpectation(original);
+    const digest = hash(content);
+    if (expected.kind === 'hash' && expected.hash === digest) return;
     plan.changes.push({
       path: file.path,
       ownership: file.ownership,
       expected,
       content,
-      hash: hash(content),
+      hash: digest,
     });
   }
   for (const file of [...rendered.files].sort((a, b) =>
@@ -191,7 +202,7 @@ async function constructPlan(options: {
       );
       lock.packageFields = merged.fields;
       lock.files[file.path] = recordedFile(file, { ownership: 'managed' });
-      await change(file, merged.content);
+      await change(file, merged.content, before);
       continue;
     }
     if (file.ownership === 'scaffold' && previousOwnership) {
@@ -217,6 +228,12 @@ async function constructPlan(options: {
     )
       continue;
     const before = await readRegular(full);
+    if (before && !previousOwnership && file.preserveExisting) {
+      plan.warnings.push(
+        `Preserved existing ${file.path}. See the project README for IDE setup.`,
+      );
+      continue;
+    }
     if (previousOwnership) {
       const beforeRegion =
         previousOwnership.region && before
@@ -246,7 +263,7 @@ async function constructPlan(options: {
       before && region
         ? replaceRegion(before.toString('utf8'), file.content)
         : file.content;
-    await change(file, content);
+    await change(file, content, before);
     lock.files[file.path] = recordedFile(
       file,
       file.ownership === 'scaffold'
@@ -270,10 +287,7 @@ async function constructPlan(options: {
   const configChanged =
     !previous || canonical(config) !== canonical(previous.config);
   if (configChanged)
-    await change(
-      { path: 'vcli.json', content: '', ownership: 'managed' },
-      json(config),
-    );
+    await change({ path: 'vcli.json', ownership: 'managed' }, json(config));
   const stateChanged =
     !previous ||
     canonical({ ...lock, operationId: '', outcomes: undefined }) !==
@@ -307,10 +321,7 @@ async function constructPlan(options: {
     };
     plan.outcomes = { ...lock.outcomes, source: 'pending' };
     validateLock(lock);
-    await change(
-      { path: 'vcli.lock.json', content: '', ownership: 'managed' },
-      json(lock),
-    );
+    await change({ path: 'vcli.lock.json', ownership: 'managed' }, json(lock));
   }
   plan.changes.sort((a, b) =>
     a.path === 'vcli.lock.json'
@@ -418,10 +429,8 @@ export async function planScaffold(
     recipes: previous.lock.recipes,
     rendered: {
       files: options.files,
-      checks: options.checks ?? previous.lock.checks,
-      pending: [
-        ...new Set([...previous.lock.pending, ...(options.pending ?? [])]),
-      ],
+      checks: validatedChecks(options.checks ?? previous.lock.checks),
+      pending: options.pending ?? [],
       warnings: [],
     },
   });
@@ -501,6 +510,7 @@ export function summarizePlan(plan: GenerationPlan): PlanSummary {
       action: expected.kind === 'absent' ? 'create' : 'replace',
       ownership,
     })),
+    ...(plan.developmentDefaults ? { privateFiles: [developmentEnvFile] } : {}),
     outcomes: { ...plan.outcomes },
     warnings: [...plan.warnings],
     pending: [...plan.pending],

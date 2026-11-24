@@ -1,5 +1,6 @@
 import {
   TOOL_VERSION,
+  validationFailure,
   type JsonObject,
   type Recipe,
   type RecipeCatalog,
@@ -21,19 +22,41 @@ function emptyOptions(value: unknown): JsonObject {
 function localOptions(value: unknown): JsonObject {
   const input = object(value);
   if (
-    Object.keys(input).some((key) => key !== 'identifier') ||
+    Object.keys(input).some(
+      (key) => !['identifier', 'profile', 'redisDocker'].includes(key),
+    ) ||
     (input.identifier !== undefined &&
-      !['email', 'username'].includes(String(input.identifier)))
+      input.identifier !== 'email' &&
+      input.identifier !== 'username')
   )
     throw new Error('UNSUPPORTED_LOCAL_IDENTIFIER');
-  // Keep the established email default shape stable for existing projects.
-  return input.identifier === 'username' ? { identifier: 'username' } : {};
+  if (
+    input.profile !== undefined &&
+    input.profile !== 'basic' &&
+    input.profile !== 'full'
+  )
+    throw validationFailure(
+      'INVALID_OPTIONS',
+      'Choose basic or full for the local authentication profile.',
+      { recipe: 'auth.local', option: 'profile' },
+    );
+  // Omitted profile retains the full auth configuration used by existing locks.
+  return {
+    ...(input.identifier === 'username' ? { identifier: 'username' } : {}),
+    ...(input.profile === 'basic' ? { profile: 'basic' } : {}),
+    ...redisDockerOption(input),
+  };
+}
+function redisDockerOption(input: Record<string, unknown>): JsonObject {
+  if (input.redisDocker !== undefined && typeof input.redisDocker !== 'boolean')
+    throw new Error('INVALID_REDIS_DOCKER_OPTION');
+  return input.redisDocker ? { redisDocker: true } : {};
 }
 function firebaseOptions(value: unknown): JsonObject {
   const input = object(value);
   if (
     Object.keys(input).some(
-      (key) => !['methods', 'actionDelivery'].includes(key),
+      (key) => !['methods', 'actionDelivery', 'redisDocker'].includes(key),
     )
   )
     throw new Error('UNSUPPORTED_FIREBASE_MODE');
@@ -58,6 +81,7 @@ function firebaseOptions(value: unknown): JsonObject {
     methods: methods.filter((method) => selected.includes(method)),
     actionDelivery:
       input.actionDelivery === 'application' ? 'application' : 'provider',
+    ...redisDockerOption(input),
   };
 }
 function mailOptions(value: unknown): JsonObject {

@@ -20,6 +20,8 @@ for (const { database, auth, mode } of combinations) {
       files = fixture.files,
       paths = files.map((file) => file.path);
     assert.equal(new Set(paths).size, paths.length);
+    for (const file of files)
+      assert.doesNotMatch(file.content, /\bref_\w+/, file.path);
     assert.equal(
       paths.includes('src/initialize-database.ts'),
       false,
@@ -37,10 +39,53 @@ for (const { database, auth, mode } of combinations) {
       'self-account.controller',
       'installation-lifecycle.service',
       'installation-lifecycle.controller',
-      'provider-cleanup.entity',
-      'provider-cleanup.service',
+      'identity-rate-limits.service',
+      'redis-identity-rate-store',
     ])
       assert.ok(paths.includes('src/modules/identity/' + name + '.ts'));
+    for (const name of [
+      'provider-cleanup.entity',
+      'provider-cleanup.service',
+      'provider-cleanup-dispatcher.service',
+    ])
+      assert.equal(
+        paths.includes(`src/modules/identity/${name}.ts`),
+        auth === 'firebase',
+      );
+    const migrationSource = contents(
+      files,
+      database === 'mongodb'
+        ? 'src/modules/identity/identity-lifecycle-migration.ts'
+        : 'migrations/002-identity-lifecycle.sql',
+    );
+    assert.equal(
+      /AppProviderCleanup|\bprovider_cleanup\b/.test(migrationSource),
+      auth === 'firebase',
+    );
+    const actionSource = contents(
+      files,
+      'src/modules/identity/identity.service.ts',
+    );
+    assert.equal(
+      /addAction|consumeAction/.test(actionSource),
+      auth === 'local',
+    );
+    const initialSchema = contents(
+      files,
+      database === 'mongodb'
+        ? 'src/initialize-identity-database.ts'
+        : 'migrations/001-identity.sql',
+    );
+    assert.equal(
+      /AppAction|CREATE TABLE IF NOT EXISTS actions\b/.test(initialSchema),
+      auth === 'local',
+    );
+    assert.equal(
+      files.some((file) =>
+        /AppRate|identity_rates|spendRate/.test(file.content),
+      ),
+      false,
+    );
     assert.ok(paths.includes('clients/auth-' + auth + '.mjs'));
     assert.equal(
       paths.includes(
@@ -61,9 +106,14 @@ for (const { database, auth, mode } of combinations) {
       false,
     );
     const module = contents(files, 'src/modules/identity/identity.module.ts');
-    assert.match(module, /provide:FreshIdentityProof/);
-    assert.match(module, /provide:AccountLifecycle/);
-    assert.match(module, /provide:InstallationLifecycle/);
+    assert.match(module, /bootstrapBinding\(IdentityRateLimits\)/);
+    assert.match(
+      module,
+      /new RedisIdentityRateStore\(\s*config\.auth\.rateLimitRedisUrl,\s*config\.auth\.rateLimitNamespace/,
+    );
+    assert.match(module, /bootstrapBinding\(FreshIdentityProof\)/);
+    assert.match(module, /bootstrapBinding\(AccountLifecycle\)/);
+    assert.match(module, /bootstrapBinding\(InstallationLifecycle\)/);
     assert.match(
       module,
       /SelfAccountController,InstallationLifecycleController/,

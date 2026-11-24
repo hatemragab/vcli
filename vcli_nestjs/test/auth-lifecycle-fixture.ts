@@ -1,7 +1,8 @@
-import { cp, mkdir, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
+import { linkGeneratedDependencies } from './generated-dependencies.ts';
 
 /** Isolated compilation only: no generated-app install/build/provider evidence. */
 export async function identityFixture(database: 'mongodb' | 'postgres') {
@@ -9,23 +10,7 @@ export async function identityFixture(database: 'mongodb' | 'postgres') {
   await rm(join(directory, 'src'), { recursive: true, force: true });
   await mkdir(join(directory, 'src'), { recursive: true });
   await writeFile(join(directory, 'package.json'), '{"type":"module"}');
-  try {
-    await symlink(
-      resolve(
-        `examples/reference-api${database === 'postgres' ? '-postgres' : ''}/node_modules`,
-      ),
-      join(directory, 'node_modules'),
-      'dir',
-    );
-  } catch (error: unknown) {
-    if (
-      !error ||
-      typeof error !== 'object' ||
-      !('code' in error) ||
-      error.code !== 'EEXIST'
-    )
-      throw error;
-  }
+  await linkGeneratedDependencies(directory);
   await cp('templates/runtime/common/src/core', join(directory, 'src/core'), {
     recursive: true,
   });
@@ -60,7 +45,7 @@ export async function identityFixture(database: 'mongodb' | 'postgres') {
   await mkdir(join(directory, 'src/core/config'), { recursive: true });
   await writeFile(
     join(directory, 'src/core/config/app-config.ts'),
-    'export type AppConfig={publicOrigin:string;auth:{sessionTtlSeconds:number;accessTtlSeconds:number;recentAuthSeconds:number}};\n',
+    'export type AppConfig={publicOrigin:string;auth:{rateLimitRedisUrl:string;rateLimitNamespace:string;sessionTtlSeconds:number;accessTtlSeconds:number;recentAuthSeconds:number}};\n',
   );
   await writeFile(
     join(directory, 'src/modules/identity/identity.tokens.ts'),

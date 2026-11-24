@@ -2,7 +2,14 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import net from 'node:net';
@@ -10,7 +17,9 @@ import net from 'node:net';
 const repository = resolve('.');
 const evidence = join(repository, 'var/cli-evidence/foundation');
 await mkdir(evidence, { recursive: true });
-const workspace = await mkdtemp(join(tmpdir(), 'vcli-generated-gate-'));
+const workspace = await mkdtemp(
+  join(await realpath(tmpdir()), 'vcli-generated-gate-'),
+);
 const env: NodeJS.ProcessEnv = {
   PATH: process.env.PATH,
   HOME: process.env.HOME,
@@ -267,12 +276,12 @@ export class MailConsumerService {
     join(consumer, 'mail-consumer.module.ts'),
     'utf8',
   );
-  assert.match(consumerModule, /imports: \[capabilities.mail\]/);
-  custom = `import {Module,type DynamicModule} from '@nestjs/common';
+  assert.match(consumerModule, /imports: \[MailModule\]/);
+  custom = `import {Module} from '@nestjs/common';
 import {MailConsumerModule} from './modules/mail-consumer/mail-consumer.module.js';
 // developer integration survives add and generation
-@Module({})
-export class AppCustomModule {static register(capabilities:Readonly<Record<string,DynamicModule>>):DynamicModule{const mail=capabilities.mail;if(!mail)throw new Error('MAIL_REQUIRED');return {module:AppCustomModule,imports:[MailConsumerModule.register({mail})]};}}
+@Module({imports:[MailConsumerModule]})
+export class AppCustomModule {}
 `;
   await writeFile(customPath, custom);
   await writeFile(
@@ -297,7 +306,9 @@ finally{if(runtime)await runtime.close();}
   assert.doesNotMatch(injected, /SYNTHETIC_CAPTURE_BODY_SENTINEL/);
   await writeFile(
     join(consumer, 'mail-consumer.module.ts'),
-    consumerModule.replace('imports: [capabilities.mail]', 'imports: []'),
+    consumerModule
+      .replace("import { MailModule } from '../mail/mail.module.js';\n", '')
+      .replace('imports: [MailModule]', 'imports: []'),
   );
   run('build-missing-consumer-import', 'npm', ['run', 'build'], app);
   const denied = run(

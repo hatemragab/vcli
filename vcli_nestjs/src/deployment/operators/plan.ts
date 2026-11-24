@@ -10,7 +10,7 @@ import type {
   DeploymentSnapshot,
   ReleaseFacts,
 } from './types.js';
-import { digest, fail, httpsUrl, same, versions } from './validation.js';
+import { digest, fail, httpsUrl, same } from './validation.js';
 
 /** Pure operator planning. This function performs no I/O and does not accept a credential profile. */
 export function planDeployment(
@@ -18,26 +18,28 @@ export function planDeployment(
   snapshot: DeploymentSnapshot,
   input: ReleaseFacts,
 ): DeploymentPlan {
-  services = parseServicePlan(services);
-  snapshot = parseDeploymentSnapshot(snapshot);
-  const release = parseReleaseFacts(input);
+  return planFromInput(services, snapshot, input);
+}
+
+function planFromInput(
+  serviceInput: unknown,
+  snapshotInput: unknown,
+  releaseInput: unknown,
+): DeploymentPlan {
+  const services = parseServicePlan(serviceInput);
+  const snapshot = parseDeploymentSnapshot(snapshotInput);
+  const release = parseReleaseFacts(releaseInput);
   if (
-    services.schemaVersion !== 1 ||
-    snapshot.schemaVersion !== 1 ||
     services.target === 'local' ||
     services.target !== snapshot.target ||
-    versions[snapshot.target] !== services.targetVersion ||
     services.targetVersion !== snapshot.targetVersion
   )
     fail('UNSUPPORTED_TARGET_VERSION');
-  httpsUrl(snapshot.origin, true);
   const readiness = httpsUrl(release.readinessUrl);
   if (readiness.pathname !== '/health/ready' || readiness.port)
     fail('INVALID_READINESS_URL');
   if (readiness.origin === snapshot.origin)
     fail('APP_AND_OPERATOR_ORIGIN_MUST_DIFFER');
-  const { fingerprint, ...body } = snapshot;
-  if (digest(body) !== fingerprint) fail('INVALID_SNAPSHOT');
   if (snapshot.resources.length > 1) fail('AMBIGUOUS_RESOURCE_DISCOVERY');
   if (
     snapshot.scope.resourceId &&
@@ -50,9 +52,6 @@ export function planDeployment(
   )
     fail('UNSUPPORTED_OPERATOR_ENVIRONMENT');
   if (
-    !Number.isInteger(services.replicas) ||
-    services.replicas < 1 ||
-    services.replicas > 8 ||
     (services.topology === 'single' && services.replicas !== 1) ||
     (services.topology === 'cluster' && services.replicas < 2)
   )
@@ -254,11 +253,7 @@ export function parseDeploymentPlan(value: unknown): DeploymentPlan {
     .safeParse(value);
   if (!parsed.success) fail('INVALID_DEPLOYMENT_PLAN');
   const input = parsed.data;
-  const result = planDeployment(
-    parseServicePlan(input.services),
-    parseDeploymentSnapshot(input.snapshot),
-    parseReleaseFacts(input.release),
-  );
+  const result = planFromInput(input.services, input.snapshot, input.release);
   if (result.id !== input.id || !same(result.steps, input.steps))
     fail('STALE_OR_TAMPERED_DEPLOYMENT_PLAN');
   return result;

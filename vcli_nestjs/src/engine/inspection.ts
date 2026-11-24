@@ -4,13 +4,7 @@ import { canonical, hash, parseJson, validateToolchain } from './data.js';
 import { EngineError } from './engine-error.js';
 import { managedRegion, validatePackageFields } from './managed-content.js';
 import { listJournals, unfinishedJournals } from './operation-storage.js';
-import {
-  assertNoSymlinks,
-  projectPath,
-  readRegular,
-  statOrNull,
-  relativePath,
-} from './paths.js';
+import { projectPath, readRegular, relativePath } from './paths.js';
 import { readLastResult } from './last-result.js';
 import { readProject, validateLock } from './state.js';
 import type { Inspection, ManagedFile } from './types.js';
@@ -155,7 +149,6 @@ export async function installationHealthy(
     )
       return false;
     const hiddenPath = path.join(projectDir, 'node_modules/.package-lock.json');
-    await assertNoSymlinks(hiddenPath);
     const hiddenBytes = await readRegular(hiddenPath);
     if (!hiddenBytes) return false;
     const hidden = object(parseJson(hiddenBytes.toString('utf8')));
@@ -216,7 +209,7 @@ export async function installationHealthy(
     const packageEntries = Object.entries(packages).filter(([relative]) =>
       relative.startsWith('node_modules/'),
     );
-    return allBounded(packageEntries, 24, async ([relative, item]) => {
+    return await allBounded(packageEntries, 24, async ([relative, item]) => {
       if (
         relative
           .split('/')
@@ -237,7 +230,6 @@ export async function installationHealthy(
       )
         return false;
       const packagePath = path.join(projectDir, relative, 'package.json');
-      await assertNoSymlinks(packagePath);
       const bytes = await readRegular(packagePath);
       return Boolean(
         bytes &&
@@ -292,15 +284,17 @@ export async function inspectProject(
 ): Promise<Inspection> {
   const absolute = path.resolve(projectDir);
   const journals = await listJournals(absolute);
-  let state: Awaited<ReturnType<typeof readProject>> | undefined;
-  if (preloaded && path.resolve(preloaded.projectDir) === absolute)
-    state = preloaded;
+  const operations = journals.map(({ id, status }) => ({ id, status }));
+  const interrupted = unfinishedJournals(journals).length > 0;
+  let state =
+    preloaded && path.resolve(preloaded.projectDir) === absolute
+      ? preloaded
+      : undefined;
   if (!state)
     try {
       state = await readProject(absolute);
     } catch (error) {
-      const interrupted = unfinishedJournals(journals);
-      if (!interrupted.length) throw error;
+      if (!interrupted) throw error;
       return {
         schemaVersion: 1,
         project: 'incomplete-project',
@@ -314,15 +308,9 @@ export async function inspectProject(
           },
         ],
         pending: [],
-        operations: journals.map(({ id, status }) => ({ id, status })),
+        operations,
       };
     }
-  if (!state)
-    throw new EngineError(
-      'STATE_DRIFT',
-      'inspect',
-      'Read project metadata before inspecting managed files.',
-    );
   const result: Inspection = {
     schemaVersion: 1,
     project: state.config.project.name,
@@ -330,10 +318,9 @@ export async function inspectProject(
     outcomes: { ...state.lock.outcomes },
     issues: [],
     pending: [...state.lock.pending],
-    operations: [],
+    operations,
   };
-  result.operations = journals.map(({ id, status }) => ({ id, status }));
-  if (unfinishedJournals(journals).length) {
+  if (interrupted) {
     result.outcomes.source = 'failed';
     result.issues.push({
       code: 'INCOMPLETE_OPERATION',
@@ -426,17 +413,6 @@ export async function doctorProject(projectDir: string): Promise<Inspection> {
       action:
         'Use Node >=26.13.1 <27 without changing a global toolchain automatically.',
     });
-  }
-  // Names only, no private environment contents or hashes are read.
-  for (const file of ['.env.development.example', '.env.production.example']) {
-    const location = await projectPath(path.resolve(projectDir), file);
-    if (!(await statOrNull(location))?.isFile())
-      result.issues.push({
-        code: 'CONFIG_EXAMPLE_MISSING',
-        path: file,
-        action:
-          'Restore the selected configuration example; inject actual values privately at runtime.',
-      });
   }
   return result;
 }

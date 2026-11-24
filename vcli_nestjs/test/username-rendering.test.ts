@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import ts from 'typescript';
 import type { ProjectConfig, RenderedFile } from '../src/contracts.js';
+import { linkGeneratedDependencies } from './generated-dependencies.ts';
 
 const root = resolve('var/cli-username-rendering');
 let source:
@@ -113,7 +114,9 @@ for (const database of ['mongodb', 'postgres'] as const) {
     );
     assert.equal(
       project.files.some((file) =>
-        /action-tokens|local-credentials|local-identity/.test(file.path),
+        /action-tokens|local-credentials|local-identity|provider-cleanup/.test(
+          file.path,
+        ),
       ),
       false,
     );
@@ -126,6 +129,23 @@ for (const database of ['mongodb', 'postgres'] as const) {
       identity,
       /MailSubmitter|ActionDeliveryWriter|ActionTokens/,
     );
+    for (const path of [
+      'src/modules/identity/identity.service.ts',
+      'src/modules/identity/identity.entity.ts',
+      'src/initialize-identity-database.ts',
+      ...(database === 'mongodb'
+        ? ['src/modules/identity/identity-lifecycle-migration.ts']
+        : [
+            'migrations/001-identity.sql',
+            'migrations/002-identity-lifecycle.sql',
+          ]),
+    ]) {
+      assert.doesNotMatch(
+        contents(project.files, path),
+        /AppAction|['"]actions['"]|CREATE TABLE IF NOT EXISTS actions\b|addAction|consumeAction|AppProviderCleanup|\bprovider_cleanup\b|vcli:(?:begin|end)/,
+        path,
+      );
+    }
     assert.match(
       contents(project.files, 'src/create-app.ts'),
       /createIdentityRuntime\(config, db\)/,
@@ -177,17 +197,7 @@ for (const database of ['mongodb', 'postgres'] as const) {
       await mkdir(dirname(path), { recursive: true });
       await writeFile(path, file.content);
     }
-    try {
-      await symlink(
-        resolve(
-          `examples/reference-api${database === 'postgres' ? '-postgres' : ''}/node_modules`,
-        ),
-        join(directory, 'node_modules'),
-        'dir',
-      );
-    } catch (error: unknown) {
-      if (!isExisting(error)) throw error;
-    }
+    await linkGeneratedDependencies(directory);
     const configPath = join(directory, 'tsconfig.json');
     const parsed = ts.readConfigFile(configPath, ts.sys.readFile);
     assert.equal(parsed.error, undefined);
@@ -228,6 +238,14 @@ test('email auth retains canonical defaults and its explicit mail requirement', 
   )!;
   assert.deepEqual(local.validateOptions({}), {});
   assert.deepEqual(local.validateOptions({ identifier: 'email' }), {});
+  assert.deepEqual(local.validateOptions({ profile: 'full' }), {});
+  assert.deepEqual(
+    local.validateOptions({ profile: 'basic', identifier: 'username' }),
+    {
+      profile: 'basic',
+      identifier: 'username',
+    },
+  );
   assert.throws(() => local.validateOptions({ identifier: 'unsupported' }));
   const email = selected('mongodb');
   email.capabilities.auth!.options = {};
@@ -241,6 +259,16 @@ test('email auth retains canonical defaults and its explicit mail requirement', 
   assert.match(
     contents(project.files, 'clients/auth-local.mjs'),
     /requestAction/,
+  );
+  assert.match(
+    contents(project.files, 'src/initialize-identity-database.ts'),
+    /AppAction/,
+  );
+  const username = await render(selected('mongodb'));
+  const manifest = 'src/generated/selected-release.ts';
+  assert.notEqual(
+    contents(project.files, manifest),
+    contents(username.files, manifest),
   );
   assert.deepEqual(
     selection.selectRecipes(catalog.recipeCatalog, {

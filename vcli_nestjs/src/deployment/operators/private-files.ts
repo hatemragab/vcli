@@ -78,10 +78,8 @@ export async function writePrivateJson(
   value: unknown,
 ): Promise<void> {
   await ensureJournalDirectory(dirname(path));
-  const existing = await readOptional(path);
-  if (existing !== undefined) {
-    /* Validated nofollow owned 0600 target before replacement. */
-  }
+  // Validate any existing target before replacement.
+  await readOptional(path);
   const tmp = join(dirname(path), '.write-' + randomUUID());
   const handle = await open(
     tmp,

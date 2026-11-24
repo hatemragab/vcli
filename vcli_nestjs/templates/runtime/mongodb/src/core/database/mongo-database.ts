@@ -48,10 +48,10 @@ export class MongoDatabase implements Transactions {
       if (
         requireInitialized &&
         (!(await connection
-          .db!.collection('ref_migrations')
+          .db!.collection('migrations')
           .findOne({ name: 'identity-v1', completed: true })) ||
           !(await connection
-            .db!.collection('ref_migrations')
+            .db!.collection('migrations')
             .findOne({ name: 'identity-lifecycle-v2', completed: true })))
       )
         throw new ApplicationError('DATABASE_INITIALIZATION_REQUIRED', 500);

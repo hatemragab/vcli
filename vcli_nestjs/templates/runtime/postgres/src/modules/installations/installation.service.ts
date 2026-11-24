@@ -1,4 +1,4 @@
-import { sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { TransactionContext } from '../../core/database/transaction-context.js';
 import { ApplicationError } from '../../core/errors/application-error.js';
 import { getTableColumns } from 'drizzle-orm';
@@ -17,6 +17,21 @@ export class InstallationService extends BaseRepository<Installation> {
     });
   }
 
+  listOwnedByIds(
+    accountId: string,
+    ids: readonly string[],
+    context: TransactionContext,
+  ): Promise<Installation[]> {
+    if (!ids.length) return Promise.resolve([]);
+    return this.findMany(
+      and(
+        eq(installationTable.accountId, accountId),
+        inArray(installationTable.id, [...ids]),
+      ),
+      { context, limit: ids.length },
+    );
+  }
+
   async enroll(
     id: string,
     accountId: string,
@@ -28,7 +43,7 @@ export class InstallationService extends BaseRepository<Installation> {
   ): Promise<Installation> {
     const db = this.database.context(ctx);
     const found = await db.execute<{ id: string }>(
-      sql`SELECT id FROM ref_installations WHERE capability_hash=${capabilityHash} FOR UPDATE`,
+      sql`SELECT id FROM installations WHERE capability_hash=${capabilityHash} FOR UPDATE`,
     );
     if (!found.rows[0])
       return this.create(
@@ -53,7 +68,7 @@ export class InstallationService extends BaseRepository<Installation> {
     if (row.generation >= 2147483647)
       throw new ApplicationError('INSTALLATION_GENERATION_EXHAUSTED', 409);
     await db.execute(
-      sql`UPDATE ref_installations SET account_id=${accountId},generation=generation+1,platform=${platform} WHERE id=${row.id} AND generation=${row.generation}`,
+      sql`UPDATE installations SET account_id=${accountId},generation=generation+1,platform=${platform} WHERE id=${row.id} AND generation=${row.generation}`,
     );
     return { ...row, accountId, generation: row.generation + 1, platform };
   }
@@ -68,7 +83,7 @@ export class InstallationService extends BaseRepository<Installation> {
     const result = await this.database
       .context(ctx)
       .execute<{ generation: number }>(
-        sql`UPDATE ref_installations SET capability_hash=${newHash},generation=generation+1 WHERE id=${id} AND account_id=${accountId} AND capability_hash=${oldHash} AND generation<2147483647 RETURNING generation`,
+        sql`UPDATE installations SET capability_hash=${newHash},generation=generation+1 WHERE id=${id} AND account_id=${accountId} AND capability_hash=${oldHash} AND generation<2147483647 RETURNING generation`,
       );
     if (!result.rows[0])
       throw new ApplicationError('INSTALLATION_PROOF_REQUIRED', 401);

@@ -18,6 +18,7 @@ export type Identity = Readonly<{
   methods: readonly string[];
   cleanupPending: boolean;
 }>;
+// vcli:begin email-actions
 export type Action = Readonly<{
   hash: string;
   accountId: string;
@@ -26,7 +27,8 @@ export type Action = Readonly<{
   expiresAt: number;
   consumedAt: number | null;
 }>;
-export const identityTable = pgTable('ref_identities', {
+// vcli:end email-actions
+export const identityTable = pgTable('identities', {
   generation: integer('generation').notNull(),
   active: boolean('active').notNull(),
   methods: jsonb('methods').$type<readonly string[]>().notNull(),
@@ -37,7 +39,8 @@ export const identityTable = pgTable('ref_identities', {
   credentialVersion: integer('credential_version').notNull(),
   enrollmentCutoff: bigint('enrollment_cutoff', { mode: 'number' }).notNull(),
 });
-export const actionTable = pgTable('ref_actions', {
+// vcli:begin email-actions
+export const actionTable = pgTable('actions', {
   hash: text('hash').primaryKey(),
   accountId: uuid('account_id').notNull(),
   purpose: text('purpose').$type<Action['purpose']>().notNull(),
@@ -45,12 +48,4 @@ export const actionTable = pgTable('ref_actions', {
   expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
   consumedAt: bigint('consumed_at', { mode: 'number' }),
 });
-export const rateTable = pgTable('ref_identity_rates', {
-  generation: integer('generation').notNull(),
-  active: boolean('active').notNull(),
-  methods: jsonb('methods').$type<readonly string[]>().notNull(),
-  cleanupPending: boolean('cleanup_pending').notNull(),
-  key: text('key').primaryKey(),
-  windowId: bigint('window_id', { mode: 'number' }).notNull(),
-  used: integer('used').notNull(),
-});
+// vcli:end email-actions

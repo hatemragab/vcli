@@ -1,6 +1,6 @@
 import type { ProjectConfig, RenderedFile } from '../contracts.js';
 import { file } from './bundle.js';
-import { selection, usernameAuth } from './selection.js';
+import { basicLocalAuth, selection, usernameAuth } from './selection.js';
 
 export function compositionFile(config: ProjectConfig): RenderedFile {
   const database = selection(config, 'database'),
@@ -12,6 +12,7 @@ export function compositionFile(config: ProjectConfig): RenderedFile {
     push = selection(config, 'push-fcm') || selection(config, 'push-apns'),
     realtime = selection(config, 'realtime'),
     diagnostics = selection(config, 'diagnostics');
+  const basicAuth = basicLocalAuth(config);
   const reliable = config.capabilities.mail?.options.reliableActions === true;
   const applicationActions =
     auth === 'auth.firebase' &&
@@ -28,21 +29,21 @@ export function compositionFile(config: ProjectConfig): RenderedFile {
   const imports = [
     "import 'reflect-metadata';",
     "import {NestFactory} from '@nestjs/core';",
-    "import {RequestMethod,type INestApplication,type DynamicModule} from '@nestjs/common';",
+    "import {RequestMethod,type INestApplication} from '@nestjs/common';",
     "import {json} from 'express';",
     "import {AppModule} from './app.module.js';",
+    "import {withBootstrapBindings} from './core/bootstrap/bootstrap-bindings.js';",
     "import type {AppConfig} from './core/config/app-config.js';",
     "import {AppLoggerService} from './core/logging/app-logger.service.js';",
     "import {ApplicationError} from './core/errors/application-error.js';",
-    "import {LoggingModule} from './core/logging/logging.module.js';",
+    "import {bindLogger} from './core/logging/logging.module.js';",
     "import {HttpErrorFilter} from './core/http/http-error.filter.js';",
     "import {recordRequest} from './core/http/record-request.js';",
-    "import {HealthModule} from './modules/health/health.module.js';",
     "import {HealthStateService} from './modules/health/health-state.service.js';",
     ...(database
       ? [
           "import {openDatabase} from './core/database/database.js';",
-          "import {DatabaseModule} from './core/database/database.module.js';",
+          "import {bindDatabase} from './core/database/database.module.js';",
           "import {assertSelectedReleaseReady,selectedReleaseManifest} from './generated/selected-release.js';",
         ]
       : []),
@@ -50,7 +51,10 @@ export function compositionFile(config: ProjectConfig): RenderedFile {
       ? [
           "import {SwaggerModule,DocumentBuilder} from '@nestjs/swagger';",
           "import {applyOpenApiSecurity} from './core/http/openapi-security.js';",
-          `import {createIdentityRuntime${auth === 'auth.firebase' ? ',type IdentityRuntimeDependencies' : ''}} from './modules/identity/identity.module.js';`,
+          "import {applyOpenApiContract,openApiOperationId} from './core/http/openapi-contract.js';",
+          basicAuth
+            ? "import {createAuthRuntime} from './modules/auth/auth.module.js';"
+            : `import {createIdentityRuntime${auth === 'auth.firebase' ? ',type IdentityRuntimeDependencies' : ''}} from './modules/identity/identity.module.js';`,
         ]
       : []),
     ...(mail
@@ -64,7 +68,7 @@ export function compositionFile(config: ProjectConfig): RenderedFile {
           "import {PrivateFilesystem} from './modules/storage/private-filesystem.js';",
           "import {LocalStorageService} from './modules/storage/local-storage.service.js';",
           "import {StorageService} from './modules/storage/storage.service.js';",
-          `import {StorageModule${media ? ',selectedStorageProfile' : ''}} from './modules/storage/storage.module.js';`,
+          `import {bindStorage${media ? ',selectedStorageProfile' : ''}} from './modules/storage/storage.module.js';`,
         ]
       : []),
     ...(media
@@ -86,7 +90,7 @@ export function compositionFile(config: ProjectConfig): RenderedFile {
       ? [
           "import {SourceEvidenceService} from './modules/diagnostics/source-evidence.service.js';",
           "import {DiagnosticReaderService} from './modules/diagnostics/diagnostic-reader.service.js';",
-          "import {DiagnosticsModule} from './modules/diagnostics/diagnostics.module.js';",
+          "import {bindDiagnostics} from './modules/diagnostics/diagnostics.module.js';",
         ]
       : []),
     ...(workers
@@ -112,7 +116,7 @@ export type ApplicationRuntime=Readonly<{app:INestApplication;config:AppConfig;l
 ${
   dependencies
     ? `/** Trusted in-process composition only; no environment or HTTP override. */
-export type ApplicationDependencies=Readonly<{${mail ? 'mailSender?:MailService;' : ''}${auth === 'auth.firebase' ? 'identity?:IdentityRuntimeDependencies;' : ''}${push ? 'push?:Parameters<typeof createPushRuntime>[2];' : ''}}>;`
+export type ApplicationDependencies=Readonly<{${mail ? 'mailSender?:MailService;' : ''}${auth === 'auth.firebase' ? 'identity?:IdentityRuntimeDependencies;' : ''}${push ? 'push?:Parameters<typeof createPushRuntime>[1];' : ''}}>;`
     : ''
 }
 export async function createApp(config:AppConfig${dependencies ? ',dependencies:ApplicationDependencies={}' : ''}):Promise<ApplicationRuntime>{
@@ -133,23 +137,33 @@ logger.record({event:failed?'application.shutdown-failed':'application.stopped',
 ${diagnostics ? 'try{await diagnostics.close();}catch{failed=true;}' : ''}await logger.flush();if(failed)throw new Error('SHUTDOWN_FAILED');})();
 try {
 ${infrastructure ? 'const infrastructure=new InfrastructureDiagnosticsService(logger);infrastructure.start();cleanup.push(async()=>{infrastructure.stop();});' : ''}
-${database ? `startupStage='database';const db=await openDatabase(config,${auth ? 'true' : 'false'}${dbEvidence ? ',databaseDiagnostics' : ''});cleanup.push(()=>db.close());startupStage='schema';await assertSelectedReleaseReady(db);startupStage='modules';` : ''}
+${database ? `startupStage='database';const db=await openDatabase(config,${auth && !basicAuth ? 'true' : 'false'}${dbEvidence ? ',databaseDiagnostics' : ''});cleanup.push(()=>db.close());startupStage='schema';await assertSelectedReleaseReady(db);startupStage='modules';` : ''}
 ${mail ? `const mailRuntime=createMailRuntime(config,${reliable ? 'db' : 'undefined'},{sender:dependencies.mailSender});cleanup.push(()=>mailRuntime.close());` : ''}
-${auth ? `const identity=await createIdentityRuntime(config,db${auth === 'auth.local' ? (usernameAuth(config) ? '' : `,mailRuntime.sender${reliable ? ',mailRuntime.intents' : ''}`) : applicationActions ? ',mailRuntime.intents,dependencies.identity' : ',dependencies.identity'});cleanup.push(()=>identity.close());` : ''}
-${storage ? 'const filesystem=new PrivateFilesystem(config.storage.localRoot);await filesystem.initialize();const storage=new StorageService(new LocalStorageService());cleanup.push(async()=>{storage.close();});' : ''}
-${media ? 'const media=await createMediaRuntime(config,identity.authority,{maximum:config.storage.maxBytes,ttlSeconds:config.storage.uploadTtlSeconds,profile:selectedStorageProfile(config,filesystem.root),stagingRoot:filesystem.root,modes:config.storage.modes},storage);cleanup.push(()=>media.close());' : ''}
-${push ? 'const push=await createPushRuntime(config,identity.authority,dependencies.push);cleanup.push(()=>push.close());' : ''}
+${basicAuth ? 'const identity=await createAuthRuntime(config,db);cleanup.push(()=>identity.close());' : auth ? `const identity=await createIdentityRuntime(config,db${auth === 'auth.local' ? (usernameAuth(config) ? '' : `,mailRuntime.sender${reliable ? ',mailRuntime.intents' : ''}`) : applicationActions ? ',mailRuntime.intents,dependencies.identity' : ',dependencies.identity'});cleanup.push(()=>identity.close());` : ''}
+${storage ? "const filesystem=new PrivateFilesystem(config.storage.localRoot);await filesystem.initialize().catch(()=>{throw new ApplicationError('STORAGE_UNAVAILABLE',500);});const storage=new StorageService(new LocalStorageService());cleanup.push(async()=>{storage.close();});" : ''}
+${media ? 'const media=await createMediaRuntime(config,{maximum:config.storage.maxBytes,ttlSeconds:config.storage.uploadTtlSeconds,profile:selectedStorageProfile(config,filesystem.root),stagingRoot:filesystem.root,modes:config.storage.modes});cleanup.push(()=>media.close());' : ''}
+${push ? 'const push=await createPushRuntime(config,dependencies.push);cleanup.push(()=>push.close());' : ''}
 ${realtime ? 'const realtime=await createRealtimeRuntime(config,identity.authority,logger,db);stopRealtime=()=>realtime.close();' : ''}
 ${notes ? `const notes=await createNotesRuntime(config,db,identity.authority${realtime ? ',realtime.publisher' : ''});` : ''}
-const capabilities:Record<string,DynamicModule>={${database ? 'database:DatabaseModule.register(db),' : ''}${mail ? 'mail:mailRuntime.module,' : ''}${auth ? 'auth:identity.module,' : ''}${storage ? 'storage:StorageModule.register(storage),' : ''}${media ? 'media:media.module,' : ''}${notes ? 'notes:notes.module,' : ''}${push ? 'push:push.module,' : ''}${realtime ? 'realtime:realtime.module,' : ''}${diagnostics ? `diagnostics:DiagnosticsModule.register(diagnostics,new DiagnosticReaderService(config.diagnostics,config.environment,{sources:config.diagnostics.sources})${workers ? ',jobs' : ''}${dbEvidence ? ',databaseDiagnostics' : ''}${infrastructure ? ',infrastructure' : ''}),` : ''}};
-app=await NestFactory.create(AppModule.register([LoggingModule.register(logger),{module:HealthModule},...Object.values(capabilities)],capabilities),{logger,abortOnError:false,bodyParser:false});
+app=await withBootstrapBindings([
+  bindLogger(logger),
+  ${database ? 'bindDatabase(db),' : ''}
+  ${mail ? '...mailRuntime.bindings,' : ''}
+  ${auth ? '...identity.bindings,' : ''}
+  ${storage ? 'bindStorage(storage),' : ''}
+  ${media ? '...media.bindings,' : ''}
+  ${notes ? '...notes.bindings,' : ''}
+  ${push ? '...push.bindings,' : ''}
+  ${realtime ? '...realtime.bindings,' : ''}
+  ${diagnostics ? `...bindDiagnostics(diagnostics,new DiagnosticReaderService(config.diagnostics,config.environment,{sources:config.diagnostics.sources})${workers ? ',jobs' : ''}${dbEvidence ? ',databaseDiagnostics' : ''}${infrastructure ? ',infrastructure' : ''}),` : ''}
+],()=>NestFactory.create(AppModule,{logger,abortOnError:false,bodyParser:false}));
 app.use(recordRequest(logger));app.use(json({limit:'64kb'}));app.useGlobalFilters(new HttpErrorFilter(logger));
-app.enableCors({origin:[...config.allowedOrigins],allowedHeaders:['Authorization','Content-Type','X-Session-Token','X-Request-Id'],exposedHeaders:['X-Request-Id','X-Operation-Id'],methods:['GET','POST','PUT','PATCH','DELETE','OPTIONS']});
+app.enableCors({origin:[...config.allowedOrigins],allowedHeaders:['Authorization','Content-Type',${basicAuth ? '' : "'X-Session-Token',"}'X-Request-Id'],exposedHeaders:['X-Request-Id','X-Operation-Id','Retry-After'],methods:['GET','POST','PUT','PATCH','DELETE','OPTIONS']});
 app.setGlobalPrefix('api',{exclude:['health/live','health/ready'].map(path=>({path,method:RequestMethod.GET}))});
 ${
   auth
     ? `const documentBuilder=new DocumentBuilder().setTitle(${JSON.stringify(config.project.name + ' API')}).setVersion('1').addBearerAuth({type:'http',scheme:'bearer'},'bearer')${auth === 'auth.firebase' ? ".addApiKey({type:'apiKey',in:'header',name:'X-Session-Token'},'appSession')" : ''}${realtime === 'realtime.centrifugo' ? ".addApiKey({type:'apiKey',in:'header',name:'X-Centrifugo-Proxy-Secret'},'centrifugoProxy')" : ''};
-const document=SwaggerModule.createDocument(app,documentBuilder.build());applyOpenApiSecurity(document);SwaggerModule.setup('docs',app,document,{swaggerOptions:{persistAuthorization:false}});`
+const document=SwaggerModule.createDocument(app,documentBuilder.build(),{operationIdFactory:openApiOperationId});applyOpenApiSecurity(document);applyOpenApiContract(document,${JSON.stringify(auth === 'auth.firebase' ? 'firebase' : basicAuth ? 'basic' : 'full')});SwaggerModule.setup('docs',app,document,{swaggerOptions:{persistAuthorization:false}});`
     : ''
 }
 await app.init();${realtime ? 'await realtime.attach(app.getHttpServer() as Server);' : ''}app.get(HealthStateService).markReady(${database ? 'selectedReleaseManifest.id' : ''});
@@ -157,10 +171,10 @@ return {app,config,logger,close};
 }catch(error){const thrown=error instanceof ApplicationError?error.code:'';
 ${
   database
-    ? "const releaseMissing=thrown==='DATABASE_INITIALIZATION_REQUIRED';const code=releaseMissing?'SCHEMA_RELEASE_REQUIRED':thrown||(startupStage==='database'?'DATABASE_UNAVAILABLE':startupStage==='schema'?'SCHEMA_RELEASE_REQUIRED':'STARTUP_FAILED');const safe=['DATABASE_UNAVAILABLE','DATABASE_URL_REQUIRED','SCHEMA_RELEASE_REQUIRED','INVALID_CONFIG','STARTUP_FAILED'].includes(code)?code:startupStage==='schema'?'SCHEMA_RELEASE_REQUIRED':startupStage==='database'?'DATABASE_UNAVAILABLE':'STARTUP_FAILED';const reported=releaseMissing?'schema':startupStage;"
-    : "const safe=thrown==='INVALID_CONFIG'?'INVALID_CONFIG':'STARTUP_FAILED';const reported='modules';"
+    ? "const releaseMissing=thrown==='DATABASE_INITIALIZATION_REQUIRED';const code=releaseMissing?'SCHEMA_RELEASE_REQUIRED':thrown||(startupStage==='database'?'DATABASE_UNAVAILABLE':startupStage==='schema'?'SCHEMA_RELEASE_REQUIRED':'STARTUP_FAILED');const safe=['DATABASE_UNAVAILABLE','DATABASE_URL_REQUIRED','SCHEMA_RELEASE_REQUIRED','INVALID_CONFIG','STORAGE_UNAVAILABLE','STARTUP_FAILED'].includes(code)?code:startupStage==='schema'?'SCHEMA_RELEASE_REQUIRED':startupStage==='database'?'DATABASE_UNAVAILABLE':'STARTUP_FAILED';const reported=releaseMissing?'schema':startupStage;"
+    : "const safe=(thrown==='INVALID_CONFIG'||thrown==='STORAGE_UNAVAILABLE')?thrown:'STARTUP_FAILED';const reported='modules';"
 }
-logger.record({event:'application.start-failed',severity:'error',errorCode:safe as 'DATABASE_UNAVAILABLE'|'DATABASE_URL_REQUIRED'|'SCHEMA_RELEASE_REQUIRED'|'INVALID_CONFIG'|'STARTUP_FAILED',stage:reported});await close().catch(()=>undefined);throw new ApplicationError(safe,500);}}
+logger.record({event:'application.start-failed',severity:'error',errorCode:safe as 'DATABASE_UNAVAILABLE'|'DATABASE_URL_REQUIRED'|'SCHEMA_RELEASE_REQUIRED'|'INVALID_CONFIG'|'STORAGE_UNAVAILABLE'|'STARTUP_FAILED',stage:reported});await close().catch(()=>undefined);throw new ApplicationError(safe,500);}}
 `,
   );
 }

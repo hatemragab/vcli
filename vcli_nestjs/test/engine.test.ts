@@ -375,6 +375,45 @@ test('nonempty destinations, escaping paths, symlinks and unsafe identifiers fai
   assert.equal(await readFile(path.join(project, 'sentinel'), 'utf8'), 'keep');
 });
 
+test('catalog and plan validation reject file ancestors and accept sibling prefixes', async (t) => {
+  const root = await workspace(t);
+  const base = catalog();
+  const catalogWithFiles = (file: string): RecipeCatalog => ({
+    ...base,
+    async render(config, recipes) {
+      const rendered = await base.render(config, recipes);
+      for (const path of [file, 'src/features-b', 'src/features/deep/notes.ts'])
+        rendered.files.push({ path, ownership: 'managed', content: 'fixture' });
+      return rendered;
+    },
+  });
+  const options = {
+    workspaceDir: root,
+    projectDir: 'sample',
+    config: baseConfig(),
+  };
+  const plan = await planInit({
+    ...options,
+    catalog: catalogWithFiles('src/features-a'),
+  });
+  assert.doesNotThrow(() => validatePlan(plan));
+  const file = plan.changes.find((change) => change.path === 'src/features-a');
+  assert.ok(file);
+  file.path = 'src/features';
+  assert.throws(() => validatePlan(plan), {
+    code: 'INVALID_PLAN',
+    action: 'A generated file cannot also be a directory.',
+  });
+  await assert.rejects(
+    planInit({ ...options, catalog: catalogWithFiles('src/features') }),
+    {
+      code: 'INVALID_CATALOG',
+      action: 'A generated file cannot also be a directory ancestor.',
+    },
+  );
+  assert.deepEqual(await readdir(root), []);
+});
+
 test('appearing init files and every stale add precondition reject before any source write', async (t) => {
   const root = await workspace(t);
   const project = path.join(root, 'sample');
@@ -886,7 +925,7 @@ test('duplicate JSON family keys cannot hide earlier desired selections', async 
   );
 });
 
-test('installation detects missing transitive manifests, and execution protects selected registration', async (t) => {
+test('installation detects missing or malformed transitive manifests and protects selected registration', async (t) => {
   const { project } = await init(t);
   await installProject(project, {
     runner: async () => {
@@ -901,6 +940,15 @@ test('installation detects missing transitive manifests, and execution protects 
     integrity: 'sha512-transitive',
   };
   await writeFile(packageLockPath, JSON.stringify(packageLock));
+  assert.equal((await inspectProject(project)).outcomes.install, 'failed');
+  const hiddenPath = path.join(project, 'node_modules/.package-lock.json');
+  const hidden = JSON.parse(await readFile(hiddenPath, 'utf8'));
+  hidden.packages['node_modules/transitive-dep'] =
+    packageLock.packages['node_modules/transitive-dep'];
+  await writeFile(hiddenPath, JSON.stringify(hidden));
+  const installed = path.join(project, 'node_modules/transitive-dep');
+  await mkdir(installed);
+  await writeFile(path.join(installed, 'package.json'), '{');
   assert.equal((await inspectProject(project)).outcomes.install, 'failed');
   await writeFile(
     path.join(project, 'src/generated/vcli-app.module.ts'),
@@ -1035,6 +1083,55 @@ test('explicit recovery refuses obsolete completed operations before changing ne
     latest,
   );
   assert.equal((await inspectProject(project)).outcomes.source, 'completed');
+});
+
+test('init recovery removes its private config only if it still matches the created file', async (t) => {
+  const root = await workspace(t);
+  const base = catalog();
+  for (const edit of [false, true]) {
+    const project = path.join(root, edit ? 'edited' : 'original');
+    const plan = await planInit({
+      workspaceDir: root,
+      projectDir: project,
+      config: baseConfig(),
+      catalog: {
+        ...base,
+        async render(config, resolved) {
+          return {
+            ...(await base.render(config, resolved)),
+            developmentDefaults: {
+              NODE_ENV: 'development',
+              FIREBASE_ACTION_CONTINUE_ORIGINS: '["http://127.0.0.1:3100"]',
+            },
+          };
+        },
+      },
+    });
+    await applyPlan(plan);
+    const env = path.join(project, '.env.development');
+    assert.match(
+      await readFile(env, 'utf8'),
+      /^FIREBASE_ACTION_CONTINUE_ORIGINS='\["http:\/\/127\.0\.0\.1:3100"\]'$/m,
+    );
+    if (edit) await writeFile(env, 'NODE_ENV=development\nPORT=3101\n');
+    const recovered = await recoverOperation(project, { operationId: plan.id });
+    if (edit) {
+      assert.equal(recovered.status, 'conflicted');
+      assert.deepEqual(recovered.conflicts, ['.env.development']);
+      assert.equal(
+        await readFile(env, 'utf8'),
+        'NODE_ENV=development\nPORT=3101\n',
+      );
+      assert.match(
+        await readFile(path.join(project, '.gitignore'), 'utf8'),
+        /\.env/,
+      );
+    } else {
+      assert.equal(recovered.status, 'recovered');
+      assert.ok(recovered.restored.includes('.env.development'));
+      await assert.rejects(stat(env), { code: 'ENOENT' });
+    }
+  }
 });
 
 test('real npm script stdout/stderr sentinels are excluded by the argument-vector process boundary', async (t) => {

@@ -3,11 +3,10 @@ import { openDatabase } from './core/database/database.js';
 import { ApplicationError } from './core/errors/application-error.js';
 import { accountSchema } from './modules/accounts/account.entity.js';
 import { installationSchema } from './modules/installations/installation.entity.js';
-import {
-  identitySchema,
-  actionSchema,
-  rateSchema,
-} from './modules/identity/identity.entity.js';
+// vcli:begin email-actions
+import { actionSchema } from './modules/identity/identity.entity.js';
+// vcli:end email-actions
+import { identitySchema } from './modules/identity/identity.entity.js';
 import {
   sessionSchema,
   refreshSchema,
@@ -22,7 +21,7 @@ export async function initializeIdentityDatabase(
 ): Promise<void> {
   const db = await openDatabase(config, false);
   try {
-    const migrations = db.connection.db!.collection('ref_migrations');
+    const migrations = db.connection.db!.collection('migrations');
     await migrations.createIndex({ name: 1 }, { unique: true });
     const claim = async (name: string): Promise<boolean> => {
       if (await migrations.findOne({ name, completed: true })) return false;
@@ -37,8 +36,9 @@ export async function initializeIdentityDatabase(
       const models = [
         db.connection.model('AppAccount', accountSchema),
         db.connection.model('AppIdentity', identitySchema),
+        // vcli:begin email-actions
         db.connection.model('AppAction', actionSchema),
-        db.connection.model('AppIdentityRate', rateSchema),
+        // vcli:end email-actions
         db.connection.model('AppInstallation', installationSchema),
         db.connection.model('AppSession', sessionSchema),
         db.connection.model('AppRefresh', refreshSchema),

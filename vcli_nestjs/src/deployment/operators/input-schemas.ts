@@ -45,6 +45,7 @@ const resourceId = z.enum([
   'apns',
   'centrifugo',
   'redis',
+  'auth-redis',
   'diagnostic-reader',
 ]);
 const service = z

@@ -8,6 +8,7 @@ const pins: Record<string, string> = {
   '@nestjs/swagger': '12.1.1',
   '@aws-sdk/client-s3': '3.1164.0',
   '@aws-sdk/s3-presigned-post': '3.1164.0',
+  '@redis/client': '6.4.0',
   '@vcli/auth-runtime': 'file:tools/vcli-auth-runtime',
   '@socket.io/mongo-adapter': '0.4.0',
   '@socket.io/postgres-adapter': '0.5.0',
@@ -129,6 +130,7 @@ export function packageFile(
   };
   if (selection(config, 'database')) {
     scripts['db:initialize'] = 'node dist/initialize-database.js';
+    scripts['db:seed'] = 'node scripts/seed.mjs';
     scripts['release:apply'] = 'node dist/initialize-database.js';
     scripts['release:reconcile'] = 'node dist/release/reconcile-command.js';
     scripts['backup:create'] = 'node dist/release/backup-command.js';

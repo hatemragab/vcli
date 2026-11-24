@@ -2,6 +2,11 @@ import { isIP } from 'node:net';
 import { z } from 'zod';
 import { diagnosticGrantSchema } from './diagnostic-access.js';
 import { diagnosticSourceSchema } from '../../core/diagnostics/source-contracts.js';
+import {
+  evidenceAgeBounds,
+  evidenceByteBounds,
+  evidenceFileBounds,
+} from '../../core/diagnostics/evidence-bounds.js';
 
 /** Literal destination prevents DNS/proxy rebinding; HTTPS uses normal certificate validation. */
 export const remoteDiagnosticProfileSchema = z.strictObject({
@@ -56,8 +61,21 @@ export const remoteDiagnosticServerProfileSchema = z.strictObject({
     .refine((sources) => new Set(sources).size === sources.length),
   evidence: z.strictObject({
     directory: z.string().min(1).max(4096),
-    maxBytes: z.number().int().min(512).max(10485760),
-    maxFiles: z.number().int().min(1).max(10),
-    maxAgeMs: z.number().int().min(1000).max(604800000).optional(),
+    maxBytes: z
+      .number()
+      .int()
+      .min(evidenceByteBounds.minimum)
+      .max(evidenceByteBounds.maximum),
+    maxFiles: z
+      .number()
+      .int()
+      .min(evidenceFileBounds.minimum)
+      .max(evidenceFileBounds.maximum),
+    maxAgeMs: z
+      .number()
+      .int()
+      .min(evidenceAgeBounds.minimum)
+      .max(evidenceAgeBounds.maximum)
+      .optional(),
   }),
 });

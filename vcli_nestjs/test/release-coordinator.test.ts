@@ -240,7 +240,7 @@ test('selected renderer: finite versioned native owner manifests, optional realt
       file.path.endsWith('selected-release.ts'),
     )!.content;
     assert.match(selected, /assertSelectedReleaseReady/);
-    assert.match(selected, /"identity","version":2/);
+    assert.match(selected, /"identity","version":4/);
     assert.match(selected, /"realtime.native-ws.single-instance","version":1/);
     assert.match(selected, /"push","version":1/);
     const entry = files.find((file) =>
@@ -267,6 +267,70 @@ test('selected renderer: finite versioned native owner manifests, optional realt
       ...assets,
       ...configuration.configuration(config).files,
     ]);
+  }
+});
+
+test('basic local auth selects only its native v1 account schema', async () => {
+  const { schema } = await releaseRenderers();
+  for (const database of ['mongodb', 'postgres'] as const) {
+    const filesFor = (recipe: string, options: Record<string, string>) =>
+      schema.schemaFiles({
+        schemaVersion: 1,
+        project: { name: 'auth-schema-proof', packageManager: 'npm' },
+        capabilities: {
+          database: { recipe: 'database.' + database, options: {} },
+          auth: { recipe, options },
+        },
+      });
+    const email = filesFor('auth.local', { profile: 'basic' });
+    const username = filesFor('auth.local', {
+      profile: 'basic',
+      identifier: 'username',
+    });
+    assert.deepEqual(email, username);
+
+    const selected = email.find((file) =>
+      file.path.endsWith('selected-release.ts'),
+    )!.content;
+    const manifest = /builtInRelease:ReleaseManifest=(\{[^\n]+\});/.exec(
+      selected,
+    );
+    assert.ok(manifest);
+    const { components } = JSON.parse(manifest[1]!) as ReleaseManifest;
+    assert.deepEqual(
+      components.map(({ component, version }) => ({ component, version })),
+      [{ component: 'identity.basic', version: 1 }],
+    );
+    assert.match(components[0]!.digest, /^[a-f0-9]{64}$/);
+    if (database === 'mongodb')
+      assert.equal(
+        components[0]!.digest,
+        '962c63d512052282a2d0eee8c99a85430e133bb5dd66adb4c2642a1adb7ad9d5',
+      );
+
+    const initializer = email.find((file) =>
+      file.path.endsWith('initialize-selected-schemas.ts'),
+    )!.content;
+    assert.match(initializer, /modules\/auth\/initialize-auth\.js/);
+    assert.match(
+      initializer,
+      /component:'identity\.basic',apply:async\(\)=>\{const database=await openDatabase\(config,false\);try\{await initializeAuth\(database\);\}finally\{await database\.close\(\);\}\}/,
+    );
+    assert.doesNotMatch(initializer, /initializeIdentityDatabase/);
+
+    for (const full of [
+      filesFor('auth.local', {}),
+      filesFor('auth.local', { profile: 'full' }),
+      filesFor('auth.firebase', {}),
+    ]) {
+      const source = full.map((file) => file.content).join('\n');
+      assert.match(source, /"identity","version":4/);
+      assert.match(source, /initializeIdentityDatabase/);
+      assert.doesNotMatch(
+        source,
+        /identity\.basic|modules\/auth\/initialize-auth/,
+      );
+    }
   }
 });
 

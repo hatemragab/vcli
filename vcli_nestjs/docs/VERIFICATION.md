@@ -2,7 +2,7 @@
 
 **Implementation active.** The [private bootstrap record](CLI-VERIFICATION.md) identifies the generated-app gates already exercised. This general policy is not evidence that other providers, devices or deployments passed. Exact versions, test runner, and executable verification scripts are selected and recorded in Phase 00; command examples elsewhere are proposed interfaces.
 
-Read [PRODUCT](PRODUCT.md), [DECISIONS](DECISIONS.md), [ARCHITECTURE](ARCHITECTURE.md), the selected phase's acceptance register, and [STATUS](../phases/STATUS.md). Evidence supports an identified behavior in an identified environment; it is not a timeless green flag for the product.
+Read [PRODUCT](PRODUCT.md), [DECISIONS](DECISIONS.md), [ARCHITECTURE](ARCHITECTURE.md), the selected phase's acceptance register, and [STATUS](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/STATUS.md). Evidence supports an identified behavior in an identified environment; it is not a timeless green flag for the product.
 
 ## Evidence levels
 
@@ -56,7 +56,7 @@ Follow the execution host's current resource/download policy. The present host's
 
 ## Recording completion
 
-Check a task only when its deliverable and task-specific evidence exist. A checked task is not a completed phase. Use `implemented_local` or `external_acceptance_pending` where required external evidence is missing; independent authorized downstream work may continue under its entry conditions. Full verification requires every declared gate for the recorded supported profiles, with required unfinished variants still visible in [STATUS](../phases/STATUS.md).
+Check a task only when its deliverable and task-specific evidence exist. A checked task is not a completed phase. Use `implemented_local` or `external_acceptance_pending` where required external evidence is missing; independent authorized downstream work may continue under its entry conditions. Full verification requires every declared gate for the recorded supported profiles, with required unfinished variants still visible in [STATUS](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/STATUS.md).
 
 ```text
 Phase/task/acceptance IDs and tested claim:

@@ -5,7 +5,14 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import {
+  clearGeneratedRedisRates,
+  redactGeneratedRedisOutput,
+  requireGeneratedRedisTestUrl,
+} from './generated-redis-fixture.ts';
 
+const redisUrl = requireGeneratedRedisTestUrl(process.env);
+const testContract = 'redis-identity-rate-fixture-v1';
 const repository = resolve('.');
 const evidence = join(repository, 'var/cli-evidence/stack');
 await mkdir(evidence, { recursive: true, mode: 0o700 });
@@ -16,6 +23,8 @@ const prior = resume
   : undefined;
 if (resume) {
   assert.equal(prior.facts.workspace, resume);
+  if (prior.facts.testContract !== testContract)
+    throw new Error('GENERATED_REDIS_RESUME_CONTRACT_MISMATCH');
   assert.ok(resume.startsWith(join(tmpdir(), 'vcli-stack-gate-')));
 }
 const env: NodeJS.ProcessEnv = {
@@ -33,8 +42,11 @@ if (prior)
       (record: { exitCode: number }) => record.exitCode === 0,
     ),
   );
+const profiles: Record<string, unknown>[] = [];
 const facts: Record<string, unknown> = {
   workspace,
+  testContract,
+  profiles,
   ...(prior ? { resumedArtifact: prior.facts.artifact } : {}),
 };
 let taskContainer: string | undefined,
@@ -49,12 +61,30 @@ const images = {
     'postgres@sha256:63e83b5a3dc36a917dccb76fe1bd2ac51f1ec9c1deb47ff20d4f04233bf6eae9',
 };
 function redact(text: string): string {
+  text = redactGeneratedRedisOutput(text, [redisUrl]);
   for (const value of privateValues)
     if (value.length >= 16) text = text.replaceAll(value, '[REDACTED]');
   return text.replace(
     /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
     '[REDACTED-JWT]',
   );
+}
+function acceptanceFacts(output: string): Record<string, unknown> {
+  const prefix = 'VCLI_ACCEPTANCE ';
+  const line = output.split('\n').find((value) => value.startsWith(prefix));
+  if (!line) throw new Error('GENERATED_ACCEPTANCE_RESULT_MISSING');
+  try {
+    const result: unknown = JSON.parse(
+      line.slice(prefix.length),
+      (_key, value: unknown) =>
+        typeof value === 'string' ? redact(value) : value,
+    );
+    if (typeof result !== 'object' || result === null || Array.isArray(result))
+      throw new Error('Invalid acceptance facts');
+    return result as Record<string, unknown>;
+  } catch {
+    throw new Error('GENERATED_ACCEPTANCE_RESULT_INVALID');
+  }
 }
 async function run(
   name: string,
@@ -77,15 +107,21 @@ async function run(
     exitCode: result.status,
     elapsedMs: Date.now() - started,
   });
+  const output = result.stdout ?? '';
+  const errors = [result.stderr ?? '', result.error?.message]
+    .filter(Boolean)
+    .join('\n');
   await writeFile(
     join(evidence, name + '.log'),
-    redact(result.stdout + result.stderr),
-    { mode: 0o600 },
+    redact(output) + redact(errors),
+    {
+      mode: 0o600,
+    },
   );
   console.log(name + ': ' + (result.status === 0 ? 'passed' : 'FAILED'));
-  assert.ifError(result.error);
+  if (result.error) throw new Error('See sanitized ' + name + '.log');
   assert.equal(result.status, 0, 'See sanitized ' + name + '.log');
-  return result.stdout;
+  return output;
 }
 function native(args: string[], check = true): string {
   const result = spawnSync(docker[0]!, [...docker.slice(1), ...args], {
@@ -159,10 +195,14 @@ try {
       tool,
     );
   const cli = join(tool, 'node_modules/@vcli/cli/bin/vcli.mjs');
-  const profiles: Record<string, unknown>[] = [];
   const alreadyPassed = (name: string) =>
     Boolean(
       prior &&
+      Array.isArray(prior.facts.profiles) &&
+      prior.facts.profiles.some(
+        (profile: Record<string, unknown>) =>
+          [profile.driver, profile.auth].join('-') === name,
+      ) &&
       prior.records.some(
         (record: { name: string; exitCode: number }) =>
           record.name === name + '-http' && record.exitCode === 0,
@@ -173,28 +213,20 @@ try {
             record.name === name + '-diagnostic-check' && record.exitCode === 0,
         )),
     );
-  const recoveredProfile = async (driver: string, auth: string) => {
-    const output = await readFile(
-      join(evidence, driver + '-' + auth + '-http.log'),
-      'utf8',
+  const recoveredProfile = (driver: string, auth: string) => {
+    const profile = prior.facts.profiles.find(
+      (value: Record<string, unknown>) =>
+        value.driver === driver && value.auth === auth,
     );
-    return {
-      driver,
-      auth,
-      ...JSON.parse(
-        output
-          .split('\n')
-          .find((line) => line.startsWith('VCLI_ACCEPTANCE '))!
-          .slice('VCLI_ACCEPTANCE '.length),
-      ),
-    };
+    assert.ok(profile, 'GENERATED_ACCEPTANCE_RESULT_MISSING');
+    return profile;
   };
   for (const driver of ['postgres', 'mongodb'] as const) {
     if (
       ['local', 'firebase'].every((auth) => alreadyPassed(driver + '-' + auth))
     ) {
       for (const auth of ['local', 'firebase'])
-        profiles.push(await recoveredProfile(driver, auth));
+        profiles.push(recoveredProfile(driver, auth));
       continue;
     }
     const suffix = randomBytes(5).toString('hex');
@@ -267,10 +299,11 @@ try {
     }
     for (const auth of ['local', 'firebase'] as const) {
       if (alreadyPassed(driver + '-' + auth)) {
-        profiles.push(await recoveredProfile(driver, auth));
+        profiles.push(recoveredProfile(driver, auth));
         continue;
       }
       const name = driver + '-' + auth,
+        projectName = 'identity-' + name,
         project = join(workspace, name),
         database = 'fixture_' + auth;
       if (driver === 'postgres')
@@ -305,7 +338,7 @@ try {
         '--preset',
         'api',
         '--name',
-        'identity-' + name,
+        projectName,
         '--database',
         driver,
         '--auth',
@@ -321,6 +354,8 @@ try {
       ];
       if (auth === 'local')
         options.push(
+          '--local-auth-profile',
+          'full',
           '--mail',
           'capture',
           '--reliable-actions',
@@ -412,8 +447,16 @@ try {
         }
         facts[name + 'ReusedPassedSourceInstallCheckBuild'] = true;
       }
+      const manifest = JSON.parse(
+        await readFile(join(project, 'package.json'), 'utf8'),
+      ) as { dependencies?: Record<string, string> };
+      assert.ok(
+        manifest.dependencies?.['@redis/client'],
+        'GENERATED_REDIS_DEPENDENCY_REQUIRED',
+      );
       const runtimeEnv: NodeJS.ProcessEnv = {
         DATABASE_URL: url,
+        REDIS_URL: redisUrl,
         LOCAL_STORAGE_ROOT: join(project, 'var/storage'),
         EVIDENCE_DIRECTORY: join(project, 'var/evidence'),
       };
@@ -448,21 +491,21 @@ try {
         await readFile(join(repository, 'test/fixtures/generated-stack.mjs')),
         { mode: 0o600 },
       );
-      const output = await run(
-        name + '-http',
-        process.execPath,
-        ['var/acceptance.mjs'],
-        project,
-        { ...runtimeEnv, FIXTURE_AUTH: auth },
-        240000,
-      );
-      const result = JSON.parse(
-        output
-          .split('\n')
-          .find((line) => line.startsWith('VCLI_ACCEPTANCE '))!
-          .slice('VCLI_ACCEPTANCE '.length),
-      );
-      profiles.push({ driver, auth, ...result });
+      await clearGeneratedRedisRates(redisUrl, projectName, 'test');
+      let output: string;
+      try {
+        output = await run(
+          name + '-http',
+          process.execPath,
+          ['var/acceptance.mjs'],
+          project,
+          { ...runtimeEnv, FIXTURE_AUTH: auth },
+          240000,
+        );
+      } finally {
+        await clearGeneratedRedisRates(redisUrl, projectName, 'test');
+      }
+      profiles.push({ ...acceptanceFacts(output), driver, auth });
       if (auth === 'local')
         await run(
           name + '-diagnostic-check',
@@ -474,7 +517,6 @@ try {
     }
     cleanupDatabase();
   }
-  facts.profiles = profiles;
   success = true;
 } finally {
   cleanupDatabase();

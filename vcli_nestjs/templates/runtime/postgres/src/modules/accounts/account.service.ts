@@ -21,7 +21,7 @@ export class AccountService extends BaseRepository<Account> {
     const db = this.database;
     const rows = await db
       .context(context)
-      .execute(sql`SELECT id FROM ref_accounts WHERE id=${id} FOR UPDATE`);
+      .execute(sql`SELECT id FROM accounts WHERE id=${id} FOR UPDATE`);
     return rows.rowCount ? this.findById(id, { context }) : null;
   }
   async verifyEmail(id: string, context: TransactionContext): Promise<void> {
@@ -47,7 +47,7 @@ export class AccountService extends BaseRepository<Account> {
     await this.database
       .context(context)
       .execute(
-        sql`UPDATE ref_accounts SET enabled=false,email=CASE WHEN ${eraseIdentityMetadata} THEN NULL ELSE email END,email_verified=CASE WHEN ${eraseIdentityMetadata} THEN false ELSE email_verified END WHERE id=${id}`,
+        sql`UPDATE accounts SET enabled=false,email=CASE WHEN ${eraseIdentityMetadata} THEN NULL ELSE email END,email_verified=CASE WHEN ${eraseIdentityMetadata} THEN false ELSE email_verified END WHERE id=${id}`,
       );
   }
 }

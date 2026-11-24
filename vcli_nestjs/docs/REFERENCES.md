@@ -1,6 +1,6 @@
 # Reference and verification map
 
-**Status: planning references, not implementation evidence.** These source-review links and official documentation entry points were retained from the discussion and review material. They were not newly verified while preparing this document. Exact version, API, security, platform, and compatibility claims must be rechecked in [Phase 00](../phases/00-design-baseline/README.md) and again when relevant implementation begins.
+**Status: planning references, not implementation evidence.** These source-review links and official documentation entry points were retained from the discussion and review material. They were not newly verified while preparing this document. Exact version, API, security, platform, and compatibility claims must be rechecked in [Phase 00](https://github.com/hatemragap/vcli/blob/511cc2fa48ee7b470b30882283ecf9b44f44b5ac/vcli_nestjs/phases/00-design-baseline/README.md) and again when relevant implementation begins.
 
 [DECISIONS.md](DECISIONS.md) is the active recommended baseline. A documentation example does not prove that VCLI's selected combination works, and an earlier source checkout is not a dependency version policy. No private checkout or conversation history is required to follow these links.
 

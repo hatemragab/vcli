@@ -61,6 +61,8 @@ export interface GenerationPlan {
   outcomes: ProjectOutcomes;
   /** Init records only permitted directory entries, never a user-file inventory. */
   initialEntries?: string[];
+  /** Public recipe defaults only, without locally generated keys. */
+  developmentDefaults?: Record<string, string>;
   sourceMigrations?: PlannedSourceMigration[];
 }
 export interface PlanInitOptions {
@@ -103,6 +105,7 @@ export interface PlanSummary {
     action: 'create' | 'replace';
     ownership: FileOwnership;
   }[];
+  privateFiles?: string[];
   outcomes: ProjectOutcomes;
   warnings: string[];
   pending: string[];
@@ -181,6 +184,7 @@ export interface OperationJournal {
   outcomes: ProjectOutcomes;
   entries: JournalEntry[];
   createdDirectories: string[];
+  developmentEnvironment?: { afterHash: string; device: number; inode: number };
 }
 
 export interface PlannedSourceMigration {

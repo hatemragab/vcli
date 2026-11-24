@@ -22,8 +22,12 @@ export function capabilityOptions(command: Command): Command {
     .option('--database <provider>', 'mongodb or postgres, selected once')
     .option('--auth <provider>', 'local or firebase')
     .option(
+      '--local-auth-profile <profile>',
+      'Local auth: basic (init default) or full (revocable sessions and account actions)',
+    )
+    .option(
       '--local-identifier <identifier>',
-      'Local auth: email (requires mail) or username (no email actions)',
+      'Local auth: email (default) or username',
     )
     .option(
       '--mail <provider>',
@@ -34,18 +38,30 @@ export function capabilityOptions(command: Command): Command {
       'Encrypted database-backed action mail intents',
     )
     .option('--storage <provider>', 'local, aws-s3 or r2')
-    .option('--media', 'Private owned media (requires database/auth/storage)')
-    .option('--notes', 'Owned notes example (requires database/auth)')
+    .option(
+      '--media',
+      'Private owned media (requires full local auth or Firebase, database and storage)',
+    )
+    .option(
+      '--notes',
+      'Owned notes example (requires full local auth or Firebase and a database)',
+    )
     .option(
       '--upload-modes <modes>',
       'Comma-separated mediated,presigned,multipart',
     )
-    .option('--realtime <provider>', 'socket-io, native-ws or centrifugo')
+    .option(
+      '--realtime <provider>',
+      'socket-io, native-ws or centrifugo (requires full local auth or Firebase)',
+    )
     .option(
       '--realtime-scale <profile>',
       'single-instance or supported cluster',
     )
-    .option('--push <providers>', 'fcm, apns or fcm,apns')
+    .option(
+      '--push <providers>',
+      'fcm, apns or fcm,apns (requires full local auth or Firebase)',
+    )
     .option('--diagnostics', 'Bounded local evidence')
     .option(
       '--evidence-sources <sources>',

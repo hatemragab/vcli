@@ -245,6 +245,15 @@ test('loopback Nest HTTP with synthetic authority and controlled persistence: st
       }
       return note;
     },
+    async editOwned(principal, id, patch) {
+      const note = { ...(await this.getOwned(principal, id)), ...patch };
+      rows.set(id, note);
+      return note;
+    },
+    async removeOwned(principal, id) {
+      await this.getOwned(principal, id);
+      rows.delete(id);
+    },
   };
   const { ApplicationError } = await load<{
     ApplicationError: new (code: string, status: number) => Error;
@@ -290,6 +299,7 @@ test('loopback Nest HTTP with synthetic authority and controlled persistence: st
       { title: ' ' },
       { title: 'a'.repeat(121) },
       { title: 'x', body: 'a'.repeat(10001) },
+      { title: 'x', imageId: randomUUID() },
     ])
       assert.equal((await request('', 'POST', input)).status, 400);
     const response = await request('', 'POST', {
@@ -327,6 +337,20 @@ test('loopback Nest HTTP with synthetic authority and controlled persistence: st
     assert.equal(missing.status, 404);
     assert.equal(foreign.status, 404);
     assert.deepEqual(await foreign.json(), await missing.json());
+    const notePath = '/' + result.note.id;
+    for (const patch of [{}, { ownerId: other.accountId }, { imageId: null }])
+      assert.equal((await request(notePath, 'PATCH', patch)).status, 400);
+    assert.equal(
+      (await request(notePath, 'PATCH', { body: 'owned' }, 'other')).status,
+      404,
+    );
+    assert.equal(
+      (await request(notePath, 'DELETE', undefined, 'other')).status,
+      404,
+    );
+    const edited = await request(notePath, 'PATCH', { body: 'updated' });
+    assert.equal(edited.status, 200);
+    assert.deepEqual(await edited.json(), { ...result.note, body: 'updated' });
     const { createNotesClient } = (await import(
       new URL(
         '../templates/runtime/common/clients/notes-client.mjs',
@@ -338,6 +362,8 @@ test('loopback Nest HTTP with synthetic authority and controlled persistence: st
         accessToken: () => Promise<string>;
       }): {
         create(input: unknown): Promise<unknown>;
+        edit(id: string, patch: unknown): Promise<Note>;
+        remove(id: string): Promise<void>;
         list(limit?: number): Promise<unknown>;
       };
     };
@@ -349,6 +375,13 @@ test('loopback Nest HTTP with synthetic authority and controlled persistence: st
     assert.equal(creations, 2);
     await client.list();
     assert.equal(creations, 2);
+    assert.equal(
+      (await client.edit(result.note.id, { title: 'New title' })).body,
+      'updated',
+    );
+    assert.equal(await client.remove(result.note.id), undefined);
+    assert.equal((await request(notePath)).status, 404);
+    assert.equal((await request(notePath, 'DELETE')).status, 404);
   } finally {
     await server.close();
   }

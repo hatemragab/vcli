@@ -5,6 +5,7 @@ import { createServer, request, type Server } from 'node:http';
 import {
   cp,
   mkdir,
+  mkdtemp,
   readFile,
   readdir,
   rm,
@@ -16,12 +17,25 @@ import {
 import { join, resolve } from 'node:path';
 import { after, test } from 'node:test';
 import { pathToFileURL } from 'node:url';
+import { Client } from '@modelcontextprotocol/sdk/client';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import ts from 'typescript';
+import { linkGeneratedDependencies } from './generated-dependencies.ts';
 
 // Only this worker-owned ignored fixture is emitted. Reuse installed SDKs without installs.
-const fixture = resolve('var/cli-diagnostic-sources');
+await mkdir(resolve('var'), { recursive: true });
+const fixture = await mkdtemp(resolve('var/cli-diagnostic-sources-'));
 const source = resolve('templates/runtime/common');
-await mkdir(fixture, { recursive: true });
+const servers = new Set<Server>();
+after(async () => {
+  for (const server of servers) {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+  await rm(fixture, { recursive: true, force: true });
+});
+await linkGeneratedDependencies(fixture);
 await cp(join(source, 'src/core/logging'), join(fixture, 'src/core/logging'), {
   recursive: true,
 });
@@ -49,13 +63,6 @@ await writeFile(
   join(fixture, 'package.json'),
   '{"type":"module","private":true}\n',
 );
-await symlink(
-  resolve('examples/reference-api/node_modules'),
-  join(fixture, 'node_modules'),
-  'dir',
-).catch((error) => {
-  if (error.code !== 'EEXIST') throw error;
-});
 const config = {
   compilerOptions: {
     target: 'ES2023',
@@ -122,13 +129,6 @@ const { executeDiagnosticQuery } = await load(
 const { DiagnosticsMcpService } = await load(
   'modules/diagnostics/diagnostics-mcp.service',
 );
-const servers = new Set<Server>();
-after(async () => {
-  for (const server of servers) {
-    server.closeAllConnections();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
 async function listen(server: Server): Promise<number> {
   servers.add(server);
   server.listen(0, '127.0.0.1');
@@ -1035,13 +1035,6 @@ test('remote refuses redirects, oversized/malicious protocol output and bounded 
 });
 
 test('MCP uses real in-memory protocol transport for read-only test metadata and rejects mutation tools', async () => {
-  const sdk = pathToFileURL(
-    resolve(
-      'examples/reference-api/node_modules/@modelcontextprotocol/sdk/dist/esm',
-    ),
-  ).href;
-  const { InMemoryTransport } = await import(sdk + '/inMemory.js');
-  const { Client } = await import(sdk + '/client/index.js');
   const config = {
     directory: await directory('mcp'),
     maxBytes: 8192,
@@ -1076,19 +1069,15 @@ test('MCP uses real in-memory protocol transport for read-only test metadata and
     await client.connect(clientTransport);
     const tools = await client.listTools();
     assert.equal(tools.tools.length, 6);
-    assert(
-      tools.tools.every(
-        (tool: { annotations: { readOnlyHint: boolean } }) =>
-          tool.annotations.readOnlyHint,
-      ),
+    assert(tools.tools.every((tool) => tool.annotations?.readOnlyHint));
+    const result = CallToolResultSchema.parse(
+      await client.callTool({ name: 'tests.getResult', arguments: context }),
     );
-    const result = await client.callTool({
-      name: 'tests.getResult',
-      arguments: context,
-    });
     assert.equal(result.isError, undefined);
+    const content = result.content[0];
+    assert.ok(content?.type === 'text');
     assert.equal(
-      JSON.parse(result.content[0].text).events[0].testResult.outcome,
+      JSON.parse(content.text).events[0].testResult.outcome,
       'failed',
     );
     for (const name of [

@@ -27,6 +27,14 @@ for (const database of ['mongodb', 'postgres'] as const) {
           );
           assert.match(module, /await store.assertInitialized/);
           assert.doesNotMatch(module, /initializeRealtime\(/);
+          const ticketPath = 'src/modules/realtime/realtime-ticket.service.ts';
+          const issuesTickets = transport !== 'socket-io';
+          assert.equal(
+            files.some((file) => file.path === ticketPath),
+            issuesTickets,
+          );
+          assert.equal(module.includes('RealtimeTicketService'), issuesTickets);
+          assert.equal(module.includes('tickets.close()'), issuesTickets);
           assert.match(
             source('src/modules/realtime/initialize-realtime.ts'),
             /realtime-v1/,

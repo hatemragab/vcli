@@ -1,8 +1,5 @@
 import path from 'node:path';
-import type { RenderedFile } from '../contracts.js';
-import { resolveRecipes } from '../engine/resolve-recipes.js';
 import { readProject } from '../engine/state.js';
-import { recipeCatalog } from '../recipes/catalog.js';
 import { CliError } from './cli-error.js';
 
 function focused(
@@ -50,37 +47,22 @@ export async function explainPath(
       evidence: 'generator-source',
     };
   const state = await readProject(root);
-  const recorded = state.lock.files[relative];
-  let rendered: RenderedFile | undefined;
-  if (!recorded?.provenance) {
-    try {
-      const resolved = resolveRecipes(state.config, recipeCatalog);
-      const project = await recipeCatalog.render(
-        resolved.config,
-        resolved.recipes,
-      );
-      rendered = project.files.find((file) => file.path === relative);
-    } catch {
-      rendered = undefined;
-    }
-  }
-  const provenance = recorded?.provenance ?? rendered?.provenance;
-  const ownership = recorded?.ownership ?? rendered?.ownership ?? 'unknown';
+  const recorded = Object.hasOwn(state.lock.files, relative)
+    ? state.lock.files[relative]
+    : undefined;
+  const provenance = recorded?.provenance;
+  const ownership = recorded?.ownership ?? 'unknown';
   return {
     path: relative,
     owner: ownership,
     renderer: provenance?.renderer ?? 'unknown',
     ...(provenance?.template ? { template: provenance.template } : {}),
-    provenance: recorded?.provenance
-      ? 'project-lock'
-      : rendered?.provenance
-        ? 'selected-render'
-        : 'unknown',
+    provenance: provenance ? 'project-lock' : 'unknown',
     check: focused(
       relative,
       ownership,
       Object.hasOwn(state.lock.files, 'test/notes.test.mjs'),
     ),
-    evidence: recorded?.provenance ? 'project-lock' : 'selected-render',
+    evidence: recorded ? 'project-lock' : 'unknown',
   };
 }

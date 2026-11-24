@@ -24,7 +24,7 @@ export async function initializeRealtime(
   );
   // Selected adapter schema contribution.
   await db
-    .collection('ref_migrations')
+    .collection('migrations')
     .updateOne(
       { name: 'realtime-v1' },
       { $set: { completed: true } },

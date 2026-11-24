@@ -36,7 +36,7 @@ const {PgDialect}=await import('drizzle-orm/pg-core');const dialect=new PgDialec
 class ControlledPool {async end(){state.closed++;if(state.closeFailure)throw state.closeFailure;}}
 await mock.module(import.meta.resolve('pg'),{namedExports:{Pool:ControlledPool}});
 await mock.module(import.meta.resolve('drizzle-orm/node-postgres'),{namedExports:{drizzle:()=>({
- execute:async(query)=>{const sql=dialect.sqlToQuery(query).sql;state.queries.push(sql);if(state.connectFailure)throw state.connectFailure;return {rowCount:sql.includes('ref_migrations')?state.markers.size:1,rows:[]};},
+ execute:async(query)=>{const sql=dialect.sqlToQuery(query).sql;state.queries.push(sql);if(state.connectFailure)throw state.connectFailure;return {rowCount:sql.includes('migrations')?state.markers.size:1,rows:[]};},
  transaction:async(work)=>{state.nativeTransactions++;return work(peer);}
 })}});
 const {PostgresDatabase:Database}=await import('./out/core/database/postgres-database.js');
@@ -63,7 +63,7 @@ await assert.rejects(Database.connect('controlled-no-network',true,observation),
 assert.equal(events.filter(event=>event.operation==='connect').length,2);
 state.queries=[];state.markers=new Set();
 const unchecked=await Database.connect('controlled-no-network',false,observation);await unchecked.close();
-assert.equal(state.queries.some(query=>query.includes('identity-')||query.includes('ref_migrations')),false);
+assert.equal(state.queries.some(query=>query.includes('identity-')||query.includes('migrations')),false);
 const {openDatabase}=await import('./out/core/database/database.js');
 const forwarded=await openDatabase({database:{url:'controlled-no-network'}},false,observation);await forwarded.close();
 const connectError=new Error('CONTROLLED_CONNECT_FAILURE');state.connectFailure=connectError;
@@ -91,6 +91,12 @@ process.stdout.write('controlled observation checks passed');
       'firebase',
       'provider',
     );
+    for (const file of fixture.files)
+      assert.doesNotMatch(
+        file.content,
+        /identity_rates|AppIdentityRate|spendRate/,
+        file.path,
+      );
     fixture.emit();
     const script = join(fixture.directory, 'schema-release.mjs');
     await writeFile(
@@ -108,7 +114,7 @@ const collection=name=>({
  findOne:async(query)=>state.markers.get(query.name)===true?{name:query.name,completed:true}:null,
  insertOne:async(row)=>{if(state.markers.has(row.name))throw new Error('CONTROLLED_DUPLICATE_LOCK');state.markers.set(row.name,row.completed);state.events.push('claim:'+row.name);},
  updateOne:async(query,update)=>{state.markers.set(query.name,update.$set.completed);state.events.push('complete:'+query.name);},
- updateMany:async()=>{state.events.push('migrate:'+name);if(state.fail&&name==='ref_installations')throw failure;}
+ updateMany:async()=>{state.events.push('migrate:'+name);if(state.fail&&name==='installations')throw failure;}
 });
 const db={connection:{db:{collection},model:name=>({createCollection:async()=>{state.events.push('collection:'+name);},createIndexes:async()=>{state.events.push('indexes:'+name);}})},close:async()=>{state.closed++;}};
 `
@@ -116,10 +122,11 @@ const db={connection:{db:{collection},model:name=>({createCollection:async()=>{s
 const {PgDialect}=await import('drizzle-orm/pg-core');const dialect=new PgDialect();
 const db={db:{transaction:async(work)=>{const original=new Map(state.markers);try{return await work({execute:async(query)=>{
  const {sql,params}=dialect.sqlToQuery(query);
+ assert.doesNotMatch(sql,/identity_rates|DROP +(?:TABLE|INDEX)/i);
  if(sql.includes('ADD COLUMN IF NOT EXISTS capability_hash')){state.events.push('apply:v2');if(state.fail)throw failure;}
- else if(sql.includes('CREATE TABLE IF NOT EXISTS ref_accounts'))state.events.push('apply:v1');
- else if(sql.startsWith('SELECT name FROM ref_migrations'))return {rowCount:state.markers.has(params[0])?1:0};
- else if(sql.startsWith('INSERT INTO ref_migrations')){state.markers.set(params[0],true);state.events.push('complete:'+params[0]);}
+ else if(sql.includes('CREATE TABLE IF NOT EXISTS accounts'))state.events.push('apply:v1');
+ else if(sql.startsWith('SELECT name FROM migrations'))return {rowCount:state.markers.has(params[0])?1:0};
+ else if(sql.startsWith('INSERT INTO migrations')){state.markers.set(params[0],true);state.events.push('complete:'+params[0]);}
  return {rowCount:1,rows:[]};
  }});}catch(error){state.markers=original;throw error;}}},close:async()=>{state.closed++;}};
 `
@@ -128,10 +135,13 @@ await mock.module(new URL('./out/core/database/database.js',import.meta.url).hre
 const {initializeIdentityDatabase}=await import('./out/initialize-identity-database.js');
 await initializeIdentityDatabase({});
 assert.equal(state.markers.get('identity-v1'),true);assert.equal(state.markers.get('identity-lifecycle-v2'),true);
-assert.ok(state.events.indexOf('complete:identity-lifecycle-v2')>state.events.indexOf(${database === 'mongodb' ? "'migrate:ref_sessions'" : "'apply:v2'"}));
+assert.ok(state.events.indexOf('complete:identity-lifecycle-v2')>state.events.indexOf(${database === 'mongodb' ? "'migrate:sessions'" : "'apply:v2'"}));
 assert.equal(state.closed,1);
+const completedMarkers=[...state.markers];
 state.events=[];await initializeIdentityDatabase({});
-assert.equal(state.events.some(event=>event.startsWith('migrate:')||event.startsWith('collection:')||event.startsWith('apply:')),false);assert.equal(state.closed,2);
+assert.deepEqual(state.markers,new Map(completedMarkers));
+assert.deepEqual(state.events,${database === 'mongodb' ? "['index:migrations']" : '[]'});
+assert.equal(state.closed,2);
 state.markers=new Map([['identity-v1',true]]);state.events=[];state.fail=true;
 await assert.rejects(initializeIdentityDatabase({}),error=>error===failure);
 assert.equal(state.markers.get('identity-v1'),true);assert.notEqual(state.markers.get('identity-lifecycle-v2'),true);assert.equal(state.closed,3);
